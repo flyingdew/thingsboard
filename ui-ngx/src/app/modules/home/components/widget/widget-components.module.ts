@@ -99,6 +99,12 @@ import { PieChartWidgetComponent } from '@home/components/widget/lib/chart/pie-c
 import { BarChartWidgetComponent } from '@home/components/widget/lib/chart/bar-chart-widget.component';
 import { PolarAreaWidgetComponent } from '@home/components/widget/lib/chart/polar-area-widget.component';
 import { RadarChartWidgetComponent } from '@home/components/widget/lib/chart/radar-chart-widget.component';
+import { MobileAppQrcodeWidgetComponent } from '@home/components/widget/lib/mobile-app-qrcode-widget.component';
+import { LabelCardWidgetComponent } from '@home/components/widget/lib/cards/label-card-widget.component';
+import { LabelValueCardWidgetComponent } from '@home/components/widget/lib/cards/label-value-card-widget.component';
+import {
+  RestConnectorSecurityComponent
+} from '@home/components/widget/lib/gateway/connectors-configuration/rest-connector-secuirity/rest-connector-security.component';
 
 @NgModule({
   declarations:
@@ -119,6 +125,7 @@ import { RadarChartWidgetComponent } from '@home/components/widget/lib/chart/rad
       NavigationCardsWidgetComponent,
       NavigationCardWidgetComponent,
       QrCodeWidgetComponent,
+      MobileAppQrcodeWidgetComponent,
       MarkdownWidgetComponent,
       SelectEntityDialogComponent,
       LegendComponent,
@@ -164,15 +171,18 @@ import { RadarChartWidgetComponent } from '@home/components/widget/lib/chart/rad
       PieChartWidgetComponent,
       BarChartWidgetComponent,
       PolarAreaWidgetComponent,
-      RadarChartWidgetComponent
+      RadarChartWidgetComponent,
+      LabelCardWidgetComponent,
+      LabelValueCardWidgetComponent
     ],
-  imports: [
-    CommonModule,
-    SharedModule,
-    RpcWidgetsModule,
-    HomePageWidgetsModule,
-    SharedHomeComponentsModule
-  ],
+    imports: [
+        CommonModule,
+        SharedModule,
+        RpcWidgetsModule,
+        HomePageWidgetsModule,
+        SharedHomeComponentsModule,
+        RestConnectorSecurityComponent
+    ],
     exports: [
         EntitiesTableWidgetComponent,
         AlarmsTableWidgetComponent,
@@ -190,6 +200,7 @@ import { RadarChartWidgetComponent } from '@home/components/widget/lib/chart/rad
         NavigationCardsWidgetComponent,
         NavigationCardWidgetComponent,
         QrCodeWidgetComponent,
+        MobileAppQrcodeWidgetComponent,
         MarkdownWidgetComponent,
         LegendComponent,
         FlotWidgetComponent,
@@ -233,7 +244,9 @@ import { RadarChartWidgetComponent } from '@home/components/widget/lib/chart/rad
         PieChartWidgetComponent,
         BarChartWidgetComponent,
         PolarAreaWidgetComponent,
-        RadarChartWidgetComponent
+        RadarChartWidgetComponent,
+        LabelCardWidgetComponent,
+        LabelValueCardWidgetComponent
     ],
   providers: [
     {provide: WIDGET_COMPONENTS_MODULE_TOKEN, useValue: WidgetComponentsModule }
