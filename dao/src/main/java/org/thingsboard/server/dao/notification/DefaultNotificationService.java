@@ -1,20 +1,8 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 package org.thingsboard.server.dao.notification;
 
+import com.google.common.util.concurrent.FluentFuture;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -27,6 +15,7 @@ import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.notification.Notification;
 import org.thingsboard.server.common.data.notification.NotificationDeliveryMethod;
 import org.thingsboard.server.common.data.notification.NotificationStatus;
+import org.thingsboard.server.common.data.notification.NotificationType;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.page.SortOrder;
@@ -34,6 +23,9 @@ import org.thingsboard.server.dao.entity.EntityDaoService;
 import org.thingsboard.server.dao.sql.query.EntityKeyMapping;
 
 import java.util.Optional;
+import java.util.Set;
+
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 @Service
 @Slf4j
@@ -72,10 +64,10 @@ public class DefaultNotificationService implements NotificationService, EntityDa
     }
 
     @Override
-    public PageData<Notification> findLatestUnreadNotificationsByRecipientId(TenantId tenantId, NotificationDeliveryMethod deliveryMethod, UserId recipientId, int limit) {
+    public PageData<Notification> findLatestUnreadNotificationsByRecipientIdAndNotificationTypes(TenantId tenantId, NotificationDeliveryMethod deliveryMethod, UserId recipientId, Set<NotificationType> types, int limit) {
         SortOrder sortOrder = new SortOrder(EntityKeyMapping.CREATED_TIME, SortOrder.Direction.DESC);
         PageLink pageLink = new PageLink(limit, 0, null, sortOrder);
-        return findNotificationsByRecipientIdAndReadStatus(tenantId, deliveryMethod, recipientId, true, pageLink);
+        return notificationDao.findUnreadByDeliveryMethodAndRecipientIdAndNotificationTypesAndPageLink(tenantId, deliveryMethod, recipientId, types, pageLink);
     }
 
     @Override
@@ -91,6 +83,12 @@ public class DefaultNotificationService implements NotificationService, EntityDa
     @Override
     public Optional<HasId<?>> findEntity(TenantId tenantId, EntityId entityId) {
         return Optional.ofNullable(findNotificationById(tenantId, new NotificationId(entityId.getId())));
+    }
+
+    @Override
+    public FluentFuture<Optional<HasId<?>>> findEntityAsync(TenantId tenantId, EntityId entityId) {
+        return FluentFuture.from(notificationDao.findByIdAsync(tenantId, entityId.getId()))
+                .transform(Optional::ofNullable, directExecutor());
     }
 
     @Override

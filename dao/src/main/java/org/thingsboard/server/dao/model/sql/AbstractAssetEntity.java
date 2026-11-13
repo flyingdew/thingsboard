@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.model.sql;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,7 +14,7 @@ import org.thingsboard.server.common.data.id.AssetId;
 import org.thingsboard.server.common.data.id.AssetProfileId;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
 import org.thingsboard.server.dao.model.ModelConstants;
 import org.thingsboard.server.dao.util.mapping.JsonConverter;
 
@@ -42,12 +30,12 @@ import static org.thingsboard.server.dao.model.ModelConstants.EXTERNAL_ID_PROPER
 @Data
 @EqualsAndHashCode(callSuper = true)
 @MappedSuperclass
-public abstract class AbstractAssetEntity<T extends Asset> extends BaseSqlEntity<T> {
+public abstract class AbstractAssetEntity<T extends Asset> extends BaseVersionedEntity<T> {
 
-    @Column(name = ASSET_TENANT_ID_PROPERTY)
+    @Column(name = ASSET_TENANT_ID_PROPERTY, columnDefinition = "uuid")
     private UUID tenantId;
 
-    @Column(name = ASSET_CUSTOMER_ID_PROPERTY)
+    @Column(name = ASSET_CUSTOMER_ID_PROPERTY, columnDefinition = "uuid")
     private UUID customerId;
 
     @Column(name = ASSET_NAME_PROPERTY)
@@ -73,11 +61,8 @@ public abstract class AbstractAssetEntity<T extends Asset> extends BaseSqlEntity
         super();
     }
 
-    public AbstractAssetEntity(Asset asset) {
-        if (asset.getId() != null) {
-            this.setUuid(asset.getId().getId());
-        }
-        this.setCreatedTime(asset.getCreatedTime());
+    public AbstractAssetEntity(T asset) {
+        super(asset);
         if (asset.getTenantId() != null) {
             this.tenantId = asset.getTenantId().getId();
         }
@@ -97,8 +82,7 @@ public abstract class AbstractAssetEntity<T extends Asset> extends BaseSqlEntity
     }
 
     public AbstractAssetEntity(AssetEntity assetEntity) {
-        this.setId(assetEntity.getId());
-        this.setCreatedTime(assetEntity.getCreatedTime());
+        super(assetEntity);
         this.tenantId = assetEntity.getTenantId();
         this.customerId = assetEntity.getCustomerId();
         this.assetProfileId = assetEntity.getAssetProfileId();
@@ -112,6 +96,7 @@ public abstract class AbstractAssetEntity<T extends Asset> extends BaseSqlEntity
     protected Asset toAsset() {
         Asset asset = new Asset(new AssetId(id));
         asset.setCreatedTime(createdTime);
+        asset.setVersion(version);
         if (tenantId != null) {
             asset.setTenantId(TenantId.fromUUID(tenantId));
         }

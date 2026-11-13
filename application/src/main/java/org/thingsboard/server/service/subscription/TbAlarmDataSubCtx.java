@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.service.subscription;
 
 import lombok.Getter;
@@ -38,7 +26,7 @@ import org.thingsboard.server.common.data.query.TsValue;
 import org.thingsboard.server.dao.alarm.AlarmService;
 import org.thingsboard.server.dao.attributes.AttributesService;
 import org.thingsboard.server.dao.entity.EntityService;
-import org.thingsboard.server.dao.model.ModelConstants;
+import org.thingsboard.server.dao.sql.query.EntityKeyMapping;
 import org.thingsboard.server.service.ws.WebSocketService;
 import org.thingsboard.server.service.ws.WebSocketSessionRef;
 import org.thingsboard.server.service.ws.telemetry.cmd.v2.AlarmDataUpdate;
@@ -93,6 +81,11 @@ public class TbAlarmDataSubCtx extends TbAbstractDataSubCtx<AlarmDataQuery> {
         this.alarmsMap = new HashMap<>();
     }
 
+    @Override
+    public void clearSubscriptions() {
+        super.clearSubscriptions();
+    }
+
     public void fetchAlarms() {
         alarmInvocationAttempts++;
         log.trace("[{}] Fetching alarms: {}", cmdId, alarmInvocationAttempts);
@@ -104,10 +97,14 @@ public class TbAlarmDataSubCtx extends TbAbstractDataSubCtx<AlarmDataQuery> {
     }
 
     private void doFetchAlarms() {
+        if (stopped) {
+            return;
+        }
         AlarmDataUpdate update;
         if (!entitiesMap.isEmpty()) {
             long start = System.currentTimeMillis();
-            PageData<AlarmData> alarms = alarmService.findAlarmDataByQueryForEntities(getTenantId(), query, getOrderedEntityIds());
+            PageData<AlarmData> alarms = alarmService.findAlarmDataByQueryForEntities(getTenantId(),
+                    getMergedUserPermissions(), query, getOrderedEntityIds());
             long end = System.currentTimeMillis();
             stats.getAlarmQueryInvocationCnt().incrementAndGet();
             stats.getAlarmQueryTimeSpent().addAndGet(end - start);
@@ -177,7 +174,7 @@ public class TbAlarmDataSubCtx extends TbAbstractDataSubCtx<AlarmDataQuery> {
                 .updateProcessor((sub, update) -> sendWsMsg(sub.getSessionId(), update))
                 .ts(startTs)
                 .build();
-        localSubscriptionService.addSubscription(subscription);
+        registerSubscription(subscription);
     }
 
     @Override
@@ -185,9 +182,8 @@ public class TbAlarmDataSubCtx extends TbAbstractDataSubCtx<AlarmDataQuery> {
         EntityId entityId = subToEntityIdMap.get(subscriptionUpdate.getSubscriptionId());
         if (entityId != null) {
             Map<String, TsValue> latestUpdate = new HashMap<>();
-            subscriptionUpdate.getData().forEach((k, v) -> {
-                Object[] data = (Object[]) v.get(0);
-                latestUpdate.put(k, new TsValue((Long) data[0], (String) data[1]));
+            subscriptionUpdate.getValues().forEach((key, values) -> {
+                latestUpdate.put(key, getLatest(values));
             });
             EntityData entityData = entitiesMap.get(entityId);
             entityData.getLatest().computeIfAbsent(keyType, tmp -> new HashMap<>()).putAll(latestUpdate);
@@ -341,8 +337,8 @@ public class TbAlarmDataSubCtx extends TbAbstractDataSubCtx<AlarmDataQuery> {
             long startTs = System.currentTimeMillis() - query.getPageLink().getTimeWindow();
             newSubsList.forEach(entity -> createAlarmSubscriptionForEntity(query.getPageLink(), startTs, entity));
         }
-        subIdsToCancel.forEach(subId -> localSubscriptionService.cancelSubscription(getSessionId(), subId));
-        subsToAdd.forEach(localSubscriptionService::addSubscription);
+        subIdsToCancel.forEach(subId -> localSubscriptionService.cancelSubscription(getTenantId(), getSessionId(), subId));
+        subsToAdd.forEach(this::registerSubscription);
     }
 
     private void resetInvocationCounter() {
@@ -354,11 +350,12 @@ public class TbAlarmDataSubCtx extends TbAbstractDataSubCtx<AlarmDataQuery> {
         EntityDataSortOrder sortOrder = query.getPageLink().getSortOrder();
         EntityDataSortOrder entitiesSortOrder;
         if (sortOrder == null || sortOrder.getKey().getType().equals(EntityKeyType.ALARM_FIELD)) {
-            entitiesSortOrder = new EntityDataSortOrder(new EntityKey(EntityKeyType.ENTITY_FIELD, ModelConstants.CREATED_TIME_PROPERTY));
+            entitiesSortOrder = new EntityDataSortOrder(new EntityKey(EntityKeyType.ENTITY_FIELD, EntityKeyMapping.CREATED_TIME));
         } else {
             entitiesSortOrder = sortOrder;
         }
         EntityDataPageLink edpl = new EntityDataPageLink(maxEntitiesPerAlarmSubscription, 0, null, entitiesSortOrder);
-        return new EntityDataQuery(query.getEntityFilter(), edpl, query.getEntityFields(), query.getLatestValues(), query.getKeyFilters());
+        return new EntityDataQuery(query.getEntityFilter(), edpl, query.getEntityFields(), query.getLatestValues(), query.getKeyFilters(), query.getKeyFiltersOperationOrDefault());
     }
+
 }

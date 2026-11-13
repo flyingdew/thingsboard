@@ -1,38 +1,18 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
-import { BaseData, ExportableEntity } from '@shared/models/base-data';
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+import { BaseData, ExportableEntity, GroupEntityInfo } from '@shared/models/base-data';
 import { DashboardId } from '@shared/models/id/dashboard-id';
 import { TenantId } from '@shared/models/id/tenant-id';
 import { ShortCustomerInfo } from '@shared/models/customer.model';
-import { Widget } from './widget.models';
+import { Widget, WidgetActionsMap, WidgetConfig, WidgetConfigMode } from './widget.models';
 import { Timewindow } from '@shared/models/time/time.models';
 import { EntityAliases } from './alias.models';
+import { CustomerId } from '@shared/models/id/customer-id';
 import { Filters } from '@shared/models/query/query.models';
 import { MatDialogRef } from '@angular/material/dialog';
-import { HasTenantId } from '@shared/models/entity.models';
-
-export interface DashboardInfo extends BaseData<DashboardId>, HasTenantId, ExportableEntity<DashboardId> {
-  tenantId?: TenantId;
-  title?: string;
-  image?: string;
-  assignedCustomers?: Array<ShortCustomerInfo>;
-  mobileHide?: boolean;
-  mobileOrder?: number;
-}
+import { HasTenantId, HasVersion } from '@shared/models/entity.models';
+import { HtmlContainerWidgetSettings } from '@shared/models/html-container.models';
 
 export interface WidgetLayout {
   sizeX?: number;
@@ -43,40 +23,132 @@ export interface WidgetLayout {
   mobileOrder?: number;
   col?: number;
   row?: number;
+  resizable?: boolean;
+  preserveAspectRatio?: boolean;
 }
 
 export interface WidgetLayouts {
   [id: string]: WidgetLayout;
 }
 
+export enum LayoutType {
+  default = 'default',
+  scada = 'scada',
+  divider = 'divider',
+  html = 'html'
+}
+
+export const layoutTypes = Object.keys(LayoutType) as LayoutType[];
+
+export const layoutTypeTranslationMap = new Map<LayoutType, string>(
+  [
+    [ LayoutType.default, 'dashboard.layout-type-default' ],
+    [ LayoutType.scada, 'dashboard.layout-type-scada' ],
+    [ LayoutType.divider, 'dashboard.layout-type-divider' ],
+    [ LayoutType.html, 'dashboard.layout-type-html' ]
+  ]
+);
+
+export enum ViewFormatType {
+  grid = 'grid',
+  list = 'list',
+}
+
+export const viewFormatTypes = Object.keys(ViewFormatType) as ViewFormatType[];
+
+export const viewFormatTypeTranslationMap = new Map<ViewFormatType, string>(
+  [
+    [ ViewFormatType.grid, 'dashboard.view-format-type-grid' ],
+    [ ViewFormatType.list, 'dashboard.view-format-type-list' ],
+  ]
+);
+
+export const htmlPageDefaultConfig: WidgetConfig = {
+  showTitle: false,
+  backgroundColor: 'rgba(255, 255, 255, 0)',
+  color: 'rgba(0, 0, 0, 0.87)',
+  padding: '0',
+  dropShadow: false,
+  enableFullscreen: false,
+  widgetStyle: {},
+  title: 'HTML page',
+  configMode: WidgetConfigMode.basic
+};
+
+export interface HtmlPageConfig {
+  settings: HtmlContainerWidgetSettings;
+  actions?: WidgetActionsMap;
+}
+
+// Id of the virtual HTML Container widget that renders a state's HTML page. It is never stored in
+// dashboard.configuration.widgets, so it cannot collide with a widget id there.
+export const htmlPageWidgetId = (stateId: string): string => `html-page-${stateId}`;
+
 export interface GridSettings {
+  layoutType?: LayoutType;
   backgroundColor?: string;
   columns?: number;
+  minColumns?: number;
   margin?: number;
   outerMargin?: boolean;
+  viewFormat?: ViewFormatType;
   backgroundSizeMode?: string;
   backgroundImageUrl?: string;
   autoFillHeight?: boolean;
+  rowHeight?: number;
   mobileAutoFillHeight?: boolean;
   mobileRowHeight?: number;
   mobileDisplayLayoutFirst?: boolean;
   layoutDimension?: LayoutDimension;
-  [key: string]: any;
+  // For LayoutType.html
+  htmlPageConfig?: HtmlPageConfig;
 }
 
 export interface DashboardLayout {
   widgets: WidgetLayouts;
   gridSettings: GridSettings;
+  breakpoints?: {[breakpointId in BreakpointId]?: Omit<DashboardLayout, 'breakpoints'>};
 }
 
-export interface DashboardLayoutInfo {
+export declare type DashboardLayoutInfo = {[breakpointId in BreakpointId]?: BreakpointLayoutInfo};
+
+export interface BreakpointLayoutInfo {
   widgetIds?: string[];
   widgetLayouts?: WidgetLayouts;
   gridSettings?: GridSettings;
+  widget?: Widget;
 }
 
+export declare type BreakpointSystemId = 'default' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+export declare type BreakpointId = BreakpointSystemId | string;
+
+export interface BreakpointInfo {
+  id: BreakpointId;
+  maxWidth?: number;
+  minWidth?: number;
+  value?: string;
+}
+
+export const breakpointIdTranslationMap = new Map<BreakpointId, string>([
+  ['default', 'dashboard.breakpoints-id.default'],
+  ['xs', 'dashboard.breakpoints-id.xs'],
+  ['sm', 'dashboard.breakpoints-id.sm'],
+  ['md', 'dashboard.breakpoints-id.md'],
+  ['lg', 'dashboard.breakpoints-id.lg'],
+  ['xl', 'dashboard.breakpoints-id.xl'],
+]);
+
+export const breakpointIdIconMap = new Map<BreakpointId, string>([
+  ['default', 'desktop_windows'],
+  ['xs', 'phone_iphone'],
+  ['sm', 'tablet_mac'],
+  ['md', 'computer'],
+  ['lg', 'monitor'],
+  ['xl', 'desktop_windows'],
+]);
+
 export interface LayoutDimension {
-  type?: LayoutType;
+  type?: LayoutDimensionType;
   fixedWidth?: number;
   fixedLayout?: DashboardLayoutId;
   leftWidthPercentage?: number;
@@ -84,7 +156,7 @@ export interface LayoutDimension {
 
 export declare type DashboardLayoutId = 'main' | 'right';
 
-export declare type LayoutType = 'percentage' | 'fixed';
+export declare type LayoutDimensionType = 'percentage' | 'fixed';
 
 export declare type DashboardStateLayouts = {[key in DashboardLayoutId]?: DashboardLayout};
 
@@ -109,6 +181,7 @@ export interface DashboardSettings {
   showDashboardTimewindow?: boolean;
   showDashboardExport?: boolean;
   showUpdateDashboardImage?: boolean;
+  showConfigureWithAi?: boolean;
   toolbarAlwaysOpen?: boolean;
   hideToolbar?: boolean;
   titleColor?: string;
@@ -120,18 +193,29 @@ export interface DashboardConfiguration {
   settings?: DashboardSettings;
   widgets?: {[id: string]: Widget } | Widget[];
   states?: {[id: string]: DashboardState };
-  entityAliases?: EntityAliases;
-  filters?: Filters;
+  entityAliases: EntityAliases;
+  filters: Filters;
   [key: string]: any;
 }
 
-export interface Dashboard extends DashboardInfo {
+export interface Dashboard extends BaseData<DashboardId>, HasTenantId, HasVersion, ExportableEntity<DashboardId> {
+  tenantId?: TenantId;
+  customerId?: CustomerId;
+  title?: string;
+  image?: string;
+  assignedCustomers?: Array<ShortCustomerInfo>;
+  mobileHide?: boolean;
+  mobileOrder?: number;
   configuration?: DashboardConfiguration;
   dialogRef?: MatDialogRef<any>;
+  resources?: Array<any>;
 }
+
+export type DashboardInfo = Dashboard & GroupEntityInfo<DashboardId>;
 
 export interface HomeDashboard extends Dashboard {
   hideDashboardToolbar: boolean;
+  isSystemDashboard?: boolean;
 }
 
 export interface HomeDashboardInfo {
@@ -139,9 +223,9 @@ export interface HomeDashboardInfo {
   hideDashboardToolbar: boolean;
 }
 
-export interface DashboardSetup extends Dashboard {
-  assignedCustomerIds?: Array<string>;
-}
+// export interface DashboardSetup extends Dashboard {
+//   assignedCustomerIds?: Array<string>;
+// }
 
 export const isPublicDashboard = (dashboard: DashboardInfo): boolean => {
   if (dashboard && dashboard.assignedCustomers) {

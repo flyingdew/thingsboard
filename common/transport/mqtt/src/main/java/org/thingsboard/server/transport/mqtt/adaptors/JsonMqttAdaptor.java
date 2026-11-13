@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.transport.mqtt.adaptors;
 
 import com.google.gson.JsonElement;
@@ -27,28 +15,21 @@ import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttPublishVariableHeader;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.thingsboard.server.common.adaptor.AdaptorException;
+import org.thingsboard.server.common.adaptor.JsonConverter;
 import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.device.profile.MqttTopics;
 import org.thingsboard.server.common.data.ota.OtaPackageType;
-import org.thingsboard.server.common.adaptor.AdaptorException;
-import org.thingsboard.server.common.adaptor.JsonConverter;
 import org.thingsboard.server.gen.transport.TransportProtos;
 import org.thingsboard.server.transport.mqtt.session.MqttDeviceAwareSessionContext;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import static org.thingsboard.server.common.data.device.profile.MqttTopics.DEVICE_SOFTWARE_FIRMWARE_RESPONSES_TOPIC_FORMAT;
 
-
-/**
- * @author Andrew Shvayka
- */
 @Component
 @Slf4j
 public class JsonMqttAdaptor implements MqttTransportAdaptor {
@@ -122,7 +103,7 @@ public class JsonMqttAdaptor implements MqttTransportAdaptor {
     public Optional<MqttMessage> convertToGatewayPublish(MqttDeviceAwareSessionContext ctx, String deviceName, TransportProtos.GetAttributeResponseMsg responseMsg) throws AdaptorException {
         return processConvertFromGatewayAttributeResponseMsg(ctx, deviceName, responseMsg);
     }
-    
+
     @Override
     public Optional<MqttMessage> convertToPublish(MqttDeviceAwareSessionContext ctx, TransportProtos.AttributeUpdateNotificationMsg notificationMsg, String topic) {
         return Optional.of(createMqttPublishMsg(ctx, topic, JsonConverter.toJson(notificationMsg)));
@@ -155,6 +136,11 @@ public class JsonMqttAdaptor implements MqttTransportAdaptor {
     }
 
     @Override
+    public Optional<MqttMessage> convertToGatewayDeviceDisconnectPublish(MqttDeviceAwareSessionContext ctx, String deviceName, int reasonCode) {
+        return Optional.of(createMqttPublishMsg(ctx, MqttTopics.GATEWAY_DISCONNECT_TOPIC, JsonConverter.toGatewayDeviceDisconnectJson(deviceName, reasonCode)));
+    }
+
+    @Override
     public Optional<MqttMessage> convertToPublish(MqttDeviceAwareSessionContext ctx, byte[] firmwareChunk, String requestId, int chunk, OtaPackageType firmwareType) {
         return Optional.of(createMqttPublishMsg(ctx, String.format(DEVICE_SOFTWARE_FIRMWARE_RESPONSES_TOPIC_FORMAT, firmwareType.getKeyPrefix(), requestId, chunk), firmwareChunk));
     }
@@ -175,15 +161,9 @@ public class JsonMqttAdaptor implements MqttTransportAdaptor {
             TransportProtos.GetAttributeRequestMsg.Builder result = TransportProtos.GetAttributeRequestMsg.newBuilder();
             result.setRequestId(getRequestId(topicName, topicBase));
             String payload = inbound.payload().toString(UTF8);
-            JsonElement requestBody = JsonParser.parseString(payload);
-            Set<String> clientKeys = toStringSet(requestBody, "clientKeys");
-            Set<String> sharedKeys = toStringSet(requestBody, "sharedKeys");
-            if (clientKeys != null) {
-                result.addAllClientAttributeNames(clientKeys);
-            }
-            if (sharedKeys != null) {
-                result.addAllSharedAttributeNames(sharedKeys);
-            }
+            JsonObject json = JsonParser.parseString(payload).getAsJsonObject();
+            JsonConverter.parseAttributeScope(json, "clientKeys", () -> result.setAllClientAttributes(true), result::addAllClientAttributeNames);
+            JsonConverter.parseAttributeScope(json, "sharedKeys", () -> result.setAllSharedAttributes(true), result::addAllSharedAttributeNames);
             return result.build();
         } catch (RuntimeException e) {
             log.debug("Failed to decode get attributes request", e);
@@ -245,15 +225,6 @@ public class JsonMqttAdaptor implements MqttTransportAdaptor {
         ByteBuf payload = ALLOCATOR.buffer();
         payload.writeBytes(json.toString().getBytes(UTF8));
         return new MqttPublishMessage(mqttFixedHeader, header, payload);
-    }
-
-    private Set<String> toStringSet(JsonElement requestBody, String name) {
-        JsonElement element = requestBody.getAsJsonObject().get(name);
-        if (element != null) {
-            return new HashSet<>(Arrays.asList(element.getAsString().split(",")));
-        } else {
-            return null;
-        }
     }
 
     private static String validatePayload(UUID sessionId, ByteBuf payloadData, boolean isEmptyPayloadAllowed) throws AdaptorException {

@@ -1,26 +1,17 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.service.sync.vc;
 
+import jakarta.annotation.PostConstruct;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.filefilter.FalseFileFilter;
+import org.apache.commons.io.filefilter.NameFileFilter;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.util.Pair;
 import org.springframework.stereotype.Service;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.StringUtils;
@@ -35,26 +26,31 @@ import org.thingsboard.server.common.data.sync.vc.RepositorySettings;
 import org.thingsboard.server.common.data.sync.vc.VersionCreationResult;
 import org.thingsboard.server.common.data.sync.vc.VersionedEntityInfo;
 import org.thingsboard.server.service.sync.vc.GitRepository.Diff;
+import org.thingsboard.server.service.sync.vc.GitRepository.RepoFile;
 
-import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 @Slf4j
-@ConditionalOnProperty(prefix = "vc", value = "git.service", havingValue = "local", matchIfMissing = true)
 @Service
 public class DefaultGitRepositoryService implements GitRepositoryService {
+
+    public static final String GROUP_ENTITY_IDS_FILE_SUFFIX = "_entities.json";
 
     @Value("${java.io.tmpdir}/repositories")
     private String defaultFolder;
@@ -73,7 +69,9 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
 
     @Override
     public Set<TenantId> getActiveRepositoryTenants() {
-        return new HashSet<>(repositories.keySet());
+        HashSet<TenantId> tenants = new HashSet<>(repositories.keySet());
+        tenants.remove(TenantId.SYS_TENANT_ID);
+        return tenants;
     }
 
     @Override
@@ -81,13 +79,20 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
         GitRepository repository = checkRepository(commit.getTenantId());
         String branch = commit.getBranch();
         try {
-            repository.fetch();
-
-            repository.createAndCheckoutOrphanBranch(commit.getWorkingBranch());
-            repository.resetAndClean();
-
-            if (repository.listRemoteBranches().contains(new BranchInfo(branch, false))) {
-                repository.merge(branch);
+            List<String> branches = repository.listBranches().stream().map(BranchInfo::getName).toList();
+            if (repository.getSettings().isLocalOnly()) {
+                if (branches.contains(commit.getBranch())) {
+                    repository.checkoutBranch(commit.getBranch());
+                } else {
+                    repository.createAndCheckoutOrphanBranch(commit.getBranch());
+                }
+                repository.resetAndClean();
+            } else {
+                repository.createAndCheckoutOrphanBranch(commit.getWorkingBranch());
+                repository.resetAndClean();
+                if (branches.contains(branch)) {
+                    repository.merge(branch);
+                }
             }
         } catch (IOException | GitAPIException gitAPIException) {
             //TODO: analyze and return meaningful exceptions that we can show to the client;
@@ -96,9 +101,20 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
     }
 
     @Override
-    public void deleteFolderContent(PendingCommit commit, String relativePath) throws IOException {
+    public void deleteFolderContent(PendingCommit commit, String folder, boolean recursively) throws IOException {
         GitRepository repository = checkRepository(commit.getTenantId());
-        FileUtils.deleteDirectory(Path.of(repository.getDirectory(), relativePath).toFile());
+        Path workDir = Path.of(repository.getDirectory());
+
+        if (recursively) {
+            Collection<File> dirs = FileUtils.listFilesAndDirs(workDir.toFile(), FalseFileFilter.FALSE, new NameFileFilter(".git").negate());
+            for (File dir : dirs) {
+                if (dir.getName().equals(folder)) {
+                    FileUtils.deleteDirectory(dir);
+                }
+            }
+        } else {
+            FileUtils.deleteDirectory(Path.of(repository.getDirectory(), folder).toFile());
+        }
     }
 
     @Override
@@ -164,9 +180,21 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
     }
 
     @Override
-    public String getFileContentAtCommit(TenantId tenantId, String relativePath, String versionId) throws IOException {
+    public String getFileContentAtCommit(TenantId tenantId, String relativePath, String versionId) {
         GitRepository repository = checkRepository(tenantId);
-        return repository.getFileContentAtCommit(relativePath, versionId);
+        try {
+            byte[] bytes = repository.getFileContentAtCommit(relativePath, versionId);
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            if (isGroupIdsFile(relativePath)) {
+                return "[]";
+            }
+            throw ex;
+        }
+    }
+
+    private static boolean isGroupIdsFile(String path) {
+        return path != null && path.endsWith(GROUP_ENTITY_IDS_FILE_SUFFIX);
     }
 
     @Override
@@ -185,7 +213,7 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
     public List<BranchInfo> listBranches(TenantId tenantId) {
         GitRepository repository = checkRepository(tenantId);
         try {
-            return repository.listRemoteBranches();
+            return repository.listBranches();
         } catch (GitAPIException gitAPIException) {
             //TODO: analyze and return meaningful exceptions that we can show to the client;
             throw new RuntimeException(gitAPIException);
@@ -196,9 +224,9 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
         GitRepository gitRepository = Optional.ofNullable(repositories.get(tenantId))
                 .orElseThrow(() -> new IllegalStateException("Repository is not initialized"));
 
-        if (!Files.exists(Path.of(gitRepository.getDirectory()))) {
+        if (!GitRepository.exists(gitRepository.getDirectory())) {
             try {
-                return cloneRepository(tenantId, gitRepository.getSettings());
+                return openOrCloneRepository(tenantId, gitRepository.getSettings(), false);
             } catch (Exception e) {
                 throw new IllegalStateException("Could not initialize the repository: " + e.getMessage(), e);
             }
@@ -212,17 +240,72 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
         return repository.listCommits(branch, path, pageLink).mapData(this::toVersion);
     }
 
+    public Pattern buildPattern(EntityType entityType, boolean group) {
+        String prefix = ".*";
+        if (group) {
+            prefix += "groups\\/";
+        }
+        prefix += entityType.name().toLowerCase() + "\\/";
+        return Pattern.compile(prefix + "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}.json");
+    }
+
     @Override
-    public List<VersionedEntityInfo> listEntitiesAtVersion(TenantId tenantId, String versionId, String path) throws Exception {
+    public Stream<VersionedEntityInfo> listEntitiesAtVersion(TenantId tenantId, String versionId, String folder, EntityType entityType, boolean isGroup, boolean recursive) throws Exception {
         GitRepository repository = checkRepository(tenantId);
-        return repository.listFilesAtCommit(versionId, path).stream()
-                .map(filePath -> {
-                    EntityId entityId = fromRelativePath(filePath);
-                    VersionedEntityInfo info = new VersionedEntityInfo();
-                    info.setExternalId(entityId);
-                    return info;
-                })
-                .collect(Collectors.toList());
+        if (entityType != null) {
+            String path = recursive ? folder : StringUtils.emptyIfNull(folder) + entityType.name().toLowerCase();
+            Pattern typePattern = buildPattern(entityType, false);
+            Pattern groupPattern = buildPattern(entityType, true);
+            return repository.listAllFilesAtCommit(versionId, path).stream()
+                    .filter(filePath -> typePattern.matcher(filePath).matches())
+                    .filter(filePath -> groupPattern.matcher(filePath).matches() == isGroup)
+                    .map(filePath -> {
+                        var parts = filePath.split("/");
+                        var uuidStr = parts[parts.length - 1];
+                        EntityId entityId = EntityIdFactory.getByTypeAndUuid(entityType, uuidStr.substring(0, 36));
+                        return new VersionedEntityInfo(entityId, filePath);
+                    })
+                    .sorted(Comparator.comparing(VersionedEntityInfo::getPath, Comparator.comparingInt(String::length))
+                            .thenComparing(VersionedEntityInfo::getPath, String::compareTo));
+        } else {
+            // Used to list all entities.
+            Map<EntityType, Pattern> typePatterns = new HashMap<>();
+            Map<EntityType, Pattern> groupPatterns = new HashMap<>();
+            //TODO: we need only specific (the ones that we export) entity types but all other should not be present in the repository
+            for (EntityType et : EntityType.values()) {
+                groupPatterns.put(et, buildPattern(et, true));
+                typePatterns.put(et, buildPattern(et, false));
+            }
+            return repository.listAllFilesAtCommit(versionId, folder).stream()
+                    .map(filePath -> {
+                        for (var pair : groupPatterns.entrySet()) {
+                            if (pair.getValue().matcher(filePath).matches()) {
+                                return Pair.of(EntityType.ENTITY_GROUP, filePath);
+                            }
+                        }
+                        for (var pair : typePatterns.entrySet()) {
+                            if (pair.getValue().matcher(filePath).matches()) {
+                                return Pair.of(pair.getKey(), filePath);
+                            }
+                        }
+                        return null;
+                    }).filter(Objects::nonNull)
+                    .map(pair -> {
+                        var parts = pair.getSecond().split("/");
+                        var uuidStr = parts[parts.length - 1];
+                        EntityId entityId = EntityIdFactory.getByTypeAndUuid(pair.getFirst(), uuidStr.substring(0, 36));
+                        return new VersionedEntityInfo(entityId, pair.getSecond());
+                    })
+                    .sorted(Comparator.comparing(VersionedEntityInfo::getPath, Comparator.comparingInt(String::length))
+                            .thenComparing(VersionedEntityInfo::getPath, String::compareTo));
+
+        }
+    }
+
+    @Override
+    public List<RepoFile> listFiles(TenantId tenantId, String versionId, String path, int depth) {
+        GitRepository repository = checkRepository(tenantId);
+        return repository.listFilesAtCommit(versionId, path, depth);
     }
 
     @Override
@@ -232,11 +315,11 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
     }
 
     @Override
-    public void initRepository(TenantId tenantId, RepositorySettings settings) throws Exception {
-        testRepository(tenantId, settings);
-
-        clearRepository(tenantId);
-        cloneRepository(tenantId, settings);
+    public void initRepository(TenantId tenantId, RepositorySettings settings, boolean fetch) throws Exception {
+        if (!settings.isLocalOnly()) {
+            clearRepository(tenantId);
+        }
+        openOrCloneRepository(tenantId, settings, fetch);
     }
 
     @Override
@@ -247,11 +330,10 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
 
     @Override
     public void clearRepository(TenantId tenantId) throws IOException {
-        GitRepository repository = repositories.get(tenantId);
+        GitRepository repository = repositories.remove(tenantId);
         if (repository != null) {
             log.debug("[{}] Clear tenant repository started.", tenantId);
             FileUtils.deleteDirectory(new File(repository.getDirectory()));
-            repositories.remove(tenantId);
             log.debug("[{}] Clear tenant repository completed.", tenantId);
         }
     }
@@ -274,17 +356,13 @@ public class DefaultGitRepositoryService implements GitRepositoryService {
         return EntityIdFactory.getByTypeAndUuid(entityType, entityId);
     }
 
-    private GitRepository cloneRepository(TenantId tenantId, RepositorySettings settings) throws Exception {
+    private GitRepository openOrCloneRepository(TenantId tenantId, RepositorySettings settings, boolean fetch) throws Exception {
         log.debug("[{}] Init tenant repository started.", tenantId);
-        Path repositoryDirectory = Path.of(repositoriesFolder, tenantId.getId().toString());
-
-        if (Files.exists(repositoryDirectory)) {
-            FileUtils.forceDelete(repositoryDirectory.toFile());
-        }
-        Files.createDirectories(repositoryDirectory);
-        GitRepository repository = GitRepository.clone(settings, repositoryDirectory.toFile());
+        Path repositoryDirectory = Path.of(repositoriesFolder, settings.isLocalOnly() ? "local_" + settings.getRepositoryUri() : tenantId.getId().toString());
+        GitRepository repository = GitRepository.openOrClone(repositoryDirectory, settings, fetch);
         repositories.put(tenantId, repository);
         log.debug("[{}] Init tenant repository completed.", tenantId);
         return repository;
     }
+
 }

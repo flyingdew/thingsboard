@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.common.data;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -22,11 +10,13 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.common.data.device.data.DeviceData;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.DeviceProfileId;
+import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.OtaPackageId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.validation.Length;
@@ -37,9 +27,10 @@ import java.io.IOException;
 import java.util.Optional;
 
 @Schema
-@EqualsAndHashCode(callSuper = true)
 @Slf4j
-public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasLabel, HasTenantId, HasCustomerId, HasOtaPackage, ExportableEntity<DeviceId> {
+@EqualsAndHashCode(callSuper = true)
+@ToString(callSuper = true)
+public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements GroupEntity<DeviceId>, HasLabel, HasCustomerId, HasOtaPackage, ExportableEntity<DeviceId>, HasVersion {
 
     private static final long serialVersionUID = 2807343040519543363L;
 
@@ -65,6 +56,8 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
 
     @Getter @Setter
     private DeviceId externalId;
+    @Getter @Setter
+    private Long version;
 
     public Device() {
         super();
@@ -86,6 +79,7 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
         this.firmwareId = device.getFirmwareId();
         this.softwareId = device.getSoftwareId();
         this.externalId = device.getExternalId();
+        this.version = device.getVersion();
     }
 
     public Device updateDevice(Device device) {
@@ -100,13 +94,14 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
         this.setSoftwareId(device.getSoftwareId());
         Optional.ofNullable(device.getAdditionalInfo()).ifPresent(this::setAdditionalInfo);
         this.setExternalId(device.getExternalId());
+        this.setVersion(device.getVersion());
         return this;
     }
 
     @Schema(description = "JSON object with the Device Id. " +
             "Specify this field to update the Device. " +
             "Referencing non-existing Device Id will cause error. " +
-            "Omit this field to create new Device." )
+            "Omit this field to create new Device.")
     @Override
     public DeviceId getId() {
         return super.getId();
@@ -127,7 +122,7 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
         this.tenantId = tenantId;
     }
 
-    @Schema(description = "JSON object with Customer Id. Use 'assignDeviceToCustomer' to change the Customer Id.", accessMode = Schema.AccessMode.READ_ONLY)
+    @Schema(description = "JSON object with Customer Id. Optional on create: when omitted, defaults to the owner of the target Entity Group or to the current Customer user. Cannot be changed on update via this endpoint; use the Owner API (changeOwnerToCustomer) to re-assign an existing Device.")
     public CustomerId getCustomerId() {
         return customerId;
     }
@@ -136,7 +131,22 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
         this.customerId = customerId;
     }
 
-    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "Unique Device Name in scope of Tenant", example = "A4B72CCDFF33")
+    @Schema(description = "JSON object with Customer or Tenant Id", accessMode = Schema.AccessMode.READ_ONLY)
+    @Override
+    public EntityId getOwnerId() {
+        return customerId != null && !customerId.isNullUid() ? customerId : tenantId;
+    }
+
+    @Override
+    public void setOwnerId(EntityId entityId) {
+        if (EntityType.CUSTOMER.equals(entityId.getEntityType())) {
+            this.customerId = new CustomerId(entityId.getId());
+        } else {
+            this.customerId = new CustomerId(CustomerId.NULL_UUID);
+        }
+    }
+
+    @Schema(description = "Unique Device Name in scope of Tenant", example = "A4B72CCDFF33")
     @Override
     public String getName() {
         return name;
@@ -164,7 +174,7 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
         this.label = label;
     }
 
-    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "JSON object with Device Profile Id.")
+    @Schema(description = "JSON object with Device Profile Id. If not provided, the type will be used to determine the profile. If neither deviceProfileId nor type is specified, the default device profile will be used.")
     public DeviceProfileId getDeviceProfileId() {
         return deviceProfileId;
     }
@@ -219,39 +229,21 @@ public class Device extends BaseDataWithAdditionalInfo<DeviceId> implements HasL
         this.softwareId = softwareId;
     }
 
-    @Schema(description = "Additional parameters of the device",implementation = com.fasterxml.jackson.databind.JsonNode.class)
+    @Schema(description = "Additional parameters of the device. " +
+            "May include: 'gateway' (boolean, whether the device is a gateway), " +
+            "'description' (string), " +
+            "'lastConnectedGateway' (string, UUID of the last gateway that connected this device).",
+            implementation = com.fasterxml.jackson.databind.JsonNode.class,
+            example = "{\"gateway\":false,\"description\":\"Temperature sensor\",\"lastConnectedGateway\":\"784f394c-42b6-435a-983c-b7beff2784f9\"}")
     @Override
     public JsonNode getAdditionalInfo() {
         return super.getAdditionalInfo();
     }
 
     @Override
-    public String toString() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("Device [tenantId=");
-        builder.append(tenantId);
-        builder.append(", customerId=");
-        builder.append(customerId);
-        builder.append(", name=");
-        builder.append(name);
-        builder.append(", type=");
-        builder.append(type);
-        builder.append(", label=");
-        builder.append(label);
-        builder.append(", deviceProfileId=");
-        builder.append(deviceProfileId);
-        builder.append(", deviceData=");
-        builder.append(firmwareId);
-        builder.append(", firmwareId=");
-        builder.append(deviceData);
-        builder.append(", additionalInfo=");
-        builder.append(getAdditionalInfo());
-        builder.append(", createdTime=");
-        builder.append(createdTime);
-        builder.append(", id=");
-        builder.append(id);
-        builder.append("]");
-        return builder.toString();
+    @JsonIgnore
+    public EntityType getEntityType() {
+        return EntityType.DEVICE;
     }
 
 }

@@ -1,19 +1,5 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import { Component, Inject, OnInit } from '@angular/core';
 import { MAT_DIALOG_DATA, MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
@@ -25,7 +11,7 @@ import { ImageService } from '@core/http/image.service';
 import { ImageResource, ImageResourceInfo, imageResourceType } from '@shared/models/resource.models';
 import {
   UploadImageDialogComponent,
-  UploadImageDialogData
+  UploadImageDialogData, UploadImageDialogResult
 } from '@shared/components/image/upload-image-dialog.component';
 import { UrlHolder } from '@shared/pipe/image.pipe';
 import { ImportExportService } from '@shared/import-export/import-export.service';
@@ -37,9 +23,10 @@ export interface ImageDialogData {
 }
 
 @Component({
-  selector: 'tb-image-dialog',
-  templateUrl: './image-dialog.component.html',
-  styleUrls: ['./image-dialog.component.scss']
+    selector: 'tb-image-dialog',
+    templateUrl: './image-dialog.component.html',
+    styleUrls: ['./image-dialog.component.scss'],
+    standalone: false
 })
 export class ImageDialogComponent extends
   DialogComponent<ImageDialogComponent, ImageResourceInfo> implements OnInit {
@@ -142,19 +129,20 @@ export class ImageDialogComponent extends
       $event.stopPropagation();
     }
     this.dialog.open<UploadImageDialogComponent, UploadImageDialogData,
-      ImageResource>(UploadImageDialogComponent, {
+      UploadImageDialogResult>(UploadImageDialogComponent, {
       disableClose: true,
       panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
       data: {
+        imageSubType: this.image.resourceSubType,
         image: this.image
       }
     }).afterClosed().subscribe((result) => {
-      if (result) {
+      if (result?.image) {
         this.imageChanged = true;
-        this.image = result;
+        this.image = result.image;
         let url;
-        if (result.base64) {
-          url = result.base64;
+        if (result.image.base64) {
+          url = result.image.base64;
         } else {
           url = this.image.link;
         }

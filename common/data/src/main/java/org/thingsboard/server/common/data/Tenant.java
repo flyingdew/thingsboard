@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.common.data;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -20,6 +8,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.TenantProfileId;
 import org.thingsboard.server.common.data.validation.Length;
@@ -27,7 +17,7 @@ import org.thingsboard.server.common.data.validation.NoXss;
 
 @Schema
 @EqualsAndHashCode(callSuper = true)
-public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTitle {
+public class Tenant extends ContactBased<TenantId> implements TenantEntity, HasTitle, HasVersion {
 
     private static final long serialVersionUID = 8057243243859922101L;
 
@@ -43,6 +33,9 @@ public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTi
     @Schema(description = "JSON object with Tenant Profile Id")
     private TenantProfileId tenantProfileId;
 
+    @Getter @Setter
+    private Long version;
+
     public Tenant() {
         super();
     }
@@ -56,6 +49,7 @@ public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTi
         this.title = tenant.getTitle();
         this.region = tenant.getRegion();
         this.tenantProfileId = tenant.getTenantProfileId();
+        this.version = tenant.getVersion();
     }
 
     public String getTitle() {
@@ -70,6 +64,11 @@ public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTi
     @JsonIgnore
     public TenantId getTenantId() {
         return getId();
+    }
+
+    @Override
+    public void setTenantId(TenantId tenantId) {
+        this.setId(tenantId);
     }
 
     @Override
@@ -98,7 +97,7 @@ public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTi
     @Schema(description = "JSON object with the tenant Id. " +
             "Specify this field to update the tenant. " +
             "Referencing non-existing tenant Id will cause error. " +
-            "Omit this field to create new tenant." )
+            "Omit this field to create new tenant.")
     @Override
     public TenantId getId() {
         return super.getId();
@@ -158,7 +157,11 @@ public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTi
         return super.getEmail();
     }
 
-    @Schema(description = "Additional parameters of the device",implementation = com.fasterxml.jackson.databind.JsonNode.class)
+    @Schema(description = "Additional parameters of the tenant. " +
+            "May include: 'description' (string), 'homeDashboardId' (string, UUID of the home dashboard), " +
+            "'homeDashboardHideToolbar' (boolean, whether to hide the dashboard toolbar).",
+            implementation = com.fasterxml.jackson.databind.JsonNode.class,
+            example = "{\"description\":\"Main tenant\",\"homeDashboardId\":\"784f394c-42b6-435a-983c-b7beff2784f9\",\"homeDashboardHideToolbar\":true}")
     @Override
     public JsonNode getAdditionalInfo() {
         return super.getAdditionalInfo();
@@ -198,5 +201,12 @@ public class Tenant extends ContactBased<TenantId> implements HasTenantId, HasTi
         builder.append("]");
         return builder.toString();
     }
+
+    @Override
+    @JsonIgnore
+    public EntityType getEntityType() {
+        return EntityType.TENANT;
+    }
+
 
 }

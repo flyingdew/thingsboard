@@ -1,36 +1,33 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 package org.thingsboard.server.common.data.security;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 import org.thingsboard.server.common.data.BaseData;
+import org.thingsboard.server.common.data.HasVersion;
 import org.thingsboard.server.common.data.id.DeviceCredentialsId;
 import org.thingsboard.server.common.data.id.DeviceId;
 
+import java.io.Serial;
+
 @Schema
 @EqualsAndHashCode(callSuper = true)
-public class DeviceCredentials extends BaseData<DeviceCredentialsId> implements DeviceCredentialsFilter {
+public class DeviceCredentials extends BaseData<DeviceCredentialsId> implements DeviceCredentialsFilter, HasVersion {
 
+    @Serial
     private static final long serialVersionUID = -7869261127032877765L;
+
     private DeviceId deviceId;
     private DeviceCredentialsType credentialsType;
     private String credentialsId;
     private String credentialsValue;
-    
+
+    @Getter @Setter
+    private Long version;
+
     public DeviceCredentials() {
         super();
     }
@@ -45,6 +42,7 @@ public class DeviceCredentials extends BaseData<DeviceCredentialsId> implements 
         this.credentialsType = deviceCredentials.getCredentialsType();
         this.credentialsId = deviceCredentials.getCredentialsId();
         this.credentialsValue = deviceCredentials.getCredentialsValue();
+        this.version = deviceCredentials.getVersion();
     }
 
     @Schema(requiredMode = Schema.RequiredMode.REQUIRED, accessMode = Schema.AccessMode.READ_ONLY, description = "The Id is automatically generated during device creation. " +
@@ -111,4 +109,5 @@ public class DeviceCredentials extends BaseData<DeviceCredentialsId> implements 
                 + credentialsId + ", credentialsValue=" + credentialsValue + ", createdTime=" + createdTime + ", id="
                 + id + "]";
     }
+
 }

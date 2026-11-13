@@ -1,18 +1,5 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 package org.thingsboard.server.dao.sql.notification;
 
 import org.springframework.data.domain.Page;
@@ -25,8 +12,10 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import org.thingsboard.server.common.data.notification.NotificationDeliveryMethod;
 import org.thingsboard.server.common.data.notification.NotificationStatus;
+import org.thingsboard.server.common.data.notification.NotificationType;
 import org.thingsboard.server.dao.model.sql.NotificationEntity;
 
+import java.util.Set;
 import java.util.UUID;
 
 @Repository
@@ -42,7 +31,20 @@ public interface NotificationRepository extends JpaRepository<NotificationEntity
                                                                             @Param("searchText") String searchText,
                                                                             Pageable pageable);
 
-    @Query("SELECT n FROM NotificationEntity n WHERE n.deliveryMethod = :deliveryMethod AND n.recipientId = :recipientId " +
+    @Query("SELECT n FROM NotificationEntity n WHERE n.deliveryMethod = :deliveryMethod " +
+            "AND n.recipientId = :recipientId AND n.status <> :status " +
+            "AND (n.type IN :types) " +
+            "AND (:searchText is NULL OR ilike(n.subject, concat('%', :searchText, '%')) = true " +
+            "OR ilike(n.text, concat('%', :searchText, '%')) = true)")
+    Page<NotificationEntity> findByDeliveryMethodAndRecipientIdAndTypeInAndStatusNot(@Param("deliveryMethod") NotificationDeliveryMethod deliveryMethod,
+                                                                                     @Param("recipientId") UUID recipientId,
+                                                                                     @Param("types") Set<NotificationType> types,
+                                                                                     @Param("status") NotificationStatus status,
+                                                                                     @Param("searchText") String searchText,
+                                                                                     Pageable pageable);
+
+    @Query("SELECT n FROM NotificationEntity n WHERE n.deliveryMethod = :deliveryMethod " +
+            "AND n.recipientId = :recipientId " +
             "AND (:searchText is NULL OR ilike(n.subject, concat('%', :searchText, '%')) = true " +
             "OR ilike(n.text, concat('%', :searchText, '%')) = true)")
     Page<NotificationEntity> findByDeliveryMethodAndRecipientId(@Param("deliveryMethod") NotificationDeliveryMethod deliveryMethod,

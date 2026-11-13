@@ -1,19 +1,5 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import { Component, forwardRef, Input, OnDestroy, OnInit } from '@angular/core';
 import {
   ControlValueAccessor,
@@ -25,9 +11,7 @@ import {
   Validator,
   Validators
 } from '@angular/forms';
-import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import {
-  DeviceProfileTransportConfiguration,
   DeviceTransportType,
   SnmpDeviceProfileTransportConfiguration
 } from '@shared/models/device.models';
@@ -44,36 +28,28 @@ export interface OidMappingConfiguration {
 }
 
 @Component({
-  selector: 'tb-snmp-device-profile-transport-configuration',
-  templateUrl: './snmp-device-profile-transport-configuration.component.html',
-  styleUrls: [],
-  providers: [
-    {
-      provide: NG_VALUE_ACCESSOR,
-      useExisting: forwardRef(() => SnmpDeviceProfileTransportConfigurationComponent),
-      multi: true
-    },
-    {
-      provide: NG_VALIDATORS,
-      useExisting: forwardRef(() => SnmpDeviceProfileTransportConfigurationComponent),
-      multi: true
-    }]
+    selector: 'tb-snmp-device-profile-transport-configuration',
+    templateUrl: './snmp-device-profile-transport-configuration.component.html',
+    styleUrls: [],
+    providers: [
+        {
+            provide: NG_VALUE_ACCESSOR,
+            useExisting: forwardRef(() => SnmpDeviceProfileTransportConfigurationComponent),
+            multi: true
+        },
+        {
+            provide: NG_VALIDATORS,
+            useExisting: forwardRef(() => SnmpDeviceProfileTransportConfigurationComponent),
+            multi: true
+        }
+    ],
+    standalone: false
 })
 export class SnmpDeviceProfileTransportConfigurationComponent implements OnInit, OnDestroy, ControlValueAccessor, Validator {
 
   snmpDeviceProfileTransportConfigurationFormGroup: UntypedFormGroup;
 
   private destroy$ = new Subject<void>();
-  private requiredValue: boolean;
-
-  get required(): boolean {
-    return this.requiredValue;
-  }
-
-  @Input()
-  set required(value: boolean) {
-    this.requiredValue = coerceBooleanProperty(value);
-  }
 
   @Input()
   disabled: boolean;
@@ -125,11 +101,8 @@ export class SnmpDeviceProfileTransportConfigurationComponent implements OnInit,
   }
 
   private updateModel() {
-    let configuration: DeviceProfileTransportConfiguration = null;
-    if (this.snmpDeviceProfileTransportConfigurationFormGroup.valid) {
-      configuration = this.snmpDeviceProfileTransportConfigurationFormGroup.getRawValue();
-      configuration.type = DeviceTransportType.SNMP;
-    }
+    const configuration = this.snmpDeviceProfileTransportConfigurationFormGroup.getRawValue();
+    configuration.type = DeviceTransportType.SNMP;
     this.propagateChange(configuration);
   }
 

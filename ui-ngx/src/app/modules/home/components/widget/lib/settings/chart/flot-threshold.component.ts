@@ -1,21 +1,16 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import { ValueSourceProperty } from '@home/components/widget/lib/settings/common/value-source.component';
-import { Component, EventEmitter, forwardRef, Input, OnInit, Output, ViewEncapsulation } from '@angular/core';
+import {
+  Component,
+  DestroyRef,
+  EventEmitter,
+  forwardRef,
+  Input,
+  OnInit,
+  Output,
+  ViewEncapsulation
+} from '@angular/core';
 import {
   ControlValueAccessor,
   NG_VALUE_ACCESSOR,
@@ -26,31 +21,28 @@ import {
 import { PageComponent } from '@shared/components/page.component';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
-import { TranslateService } from '@ngx-translate/core';
-import { isNumber } from '@core/utils';
 import { IAliasController } from '@core/api/widget-api.models';
 import { TbFlotKeyThreshold } from '@home/components/widget/lib/flot-widget.models';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
-  selector: 'tb-flot-threshold',
-  templateUrl: './flot-threshold.component.html',
-  styleUrls: ['./flot-threshold.component.scss'],
-  providers: [
-    {
-      provide: NG_VALUE_ACCESSOR,
-      useExisting: forwardRef(() => FlotThresholdComponent),
-      multi: true
-    }
-  ],
-  encapsulation: ViewEncapsulation.None
+    selector: 'tb-flot-threshold',
+    templateUrl: './flot-threshold.component.html',
+    styleUrls: [],
+    providers: [
+        {
+            provide: NG_VALUE_ACCESSOR,
+            useExisting: forwardRef(() => FlotThresholdComponent),
+            multi: true
+        }
+    ],
+    encapsulation: ViewEncapsulation.None,
+    standalone: false
 })
 export class FlotThresholdComponent extends PageComponent implements OnInit, ControlValueAccessor {
 
   @Input()
   disabled: boolean;
-
-  @Input()
-  expanded = false;
 
   @Input()
   aliasController: IAliasController;
@@ -65,8 +57,8 @@ export class FlotThresholdComponent extends PageComponent implements OnInit, Con
   public thresholdFormGroup: UntypedFormGroup;
 
   constructor(protected store: Store<AppState>,
-              private translate: TranslateService,
-              private fb: UntypedFormBuilder) {
+              private fb: UntypedFormBuilder,
+              private destroyRef: DestroyRef) {
     super(store);
   }
 
@@ -76,7 +68,9 @@ export class FlotThresholdComponent extends PageComponent implements OnInit, Con
       lineWidth: [null, [Validators.min(0)]],
       color: [null, []]
     });
-    this.thresholdFormGroup.valueChanges.subscribe(() => {
+    this.thresholdFormGroup.valueChanges.pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.updateModel();
     });
   }
@@ -110,26 +104,8 @@ export class FlotThresholdComponent extends PageComponent implements OnInit, Con
     );
   }
 
-  thresholdText(): string {
-    const value: ValueSourceProperty = this.thresholdFormGroup.get('valueSource').value;
-    return this.valueSourcePropertyText(value);
-  }
-
-  private valueSourcePropertyText(source?: ValueSourceProperty): string {
-    if (source) {
-      if (source.valueSource === 'predefinedValue') {
-        return `${isNumber(source.value) ? source.value : 0}`;
-      } else if (source.valueSource === 'entityAttribute') {
-        const alias = source.entityAlias || 'Undefined';
-        const key = source.attribute || 'Undefined';
-        return `${alias}.${key}`;
-      }
-    }
-    return 'Undefined';
-  }
-
   private updateModel() {
-    const value: {valueSource: ValueSourceProperty, lineWidth: number, color: string} = this.thresholdFormGroup.value;
+    const value: {valueSource: ValueSourceProperty; lineWidth: number; color: string} = this.thresholdFormGroup.value;
     this.modelValue = {
       thresholdValueSource: value?.valueSource?.valueSource,
       thresholdEntityAlias: value?.valueSource?.entityAlias,

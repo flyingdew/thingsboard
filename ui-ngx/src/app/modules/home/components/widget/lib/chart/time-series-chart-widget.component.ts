@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   AfterViewInit,
   ChangeDetectorRef,
@@ -21,7 +8,7 @@ import {
   ElementRef,
   Input,
   OnDestroy,
-  OnInit,
+  OnInit, Optional,
   Renderer2,
   TemplateRef,
   ViewChild,
@@ -36,21 +23,25 @@ import { Observable } from 'rxjs';
 import { backgroundStyle, ComponentStyle, overlayStyle, textStyle } from '@shared/models/widget-settings.models';
 import { ImagePipe } from '@shared/pipe/image.pipe';
 import { DomSanitizer } from '@angular/platform-browser';
-import { LegendConfig, LegendData, LegendKey, LegendPosition } from '@shared/models/widget.models';
+import { compareLegendDataKeys, LegendConfig, LegendData, LegendKey, LegendPosition } from '@shared/models/widget.models';
 import { TbTimeSeriesChart } from '@home/components/widget/lib/chart/time-series-chart';
 import {
   timeSeriesChartWidgetDefaultSettings,
   TimeSeriesChartWidgetSettings
 } from '@home/components/widget/lib/chart/time-series-chart-widget.models';
 import { mergeDeep } from '@core/utils';
+import { WidgetComponent } from '@home/components/widget/widget.component';
+import { coerceBoolean } from '@shared/decorators/coercion';
+import { ChartWidgetComponent } from '@home/components/widget/lib/chart/chart.models';
 
 @Component({
-  selector: 'tb-time-series-chart-widget',
-  templateUrl: './time-series-chart-widget.component.html',
-  styleUrls: ['./time-series-chart-widget.component.scss'],
-  encapsulation: ViewEncapsulation.None
+    selector: 'tb-time-series-chart-widget',
+    templateUrl: './time-series-chart-widget.component.html',
+    styleUrls: ['./time-series-chart-widget.component.scss'],
+    encapsulation: ViewEncapsulation.None,
+    standalone: false
 })
-export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterViewInit {
+export class TimeSeriesChartWidgetComponent implements ChartWidgetComponent, OnInit, OnDestroy, AfterViewInit {
 
   @ViewChild('chartShape', {static: false})
   chartShape: ElementRef<HTMLElement>;
@@ -63,6 +54,10 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
   @Input()
   widgetTitlePanel: TemplateRef<any>;
 
+  @Input()
+  @coerceBoolean()
+  reportMode = false;
+
   horizontalLegendPosition = false;
 
   showLegend: boolean;
@@ -73,7 +68,6 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
 
   backgroundStyle$: Observable<ComponentStyle>;
   overlayStyle: ComponentStyle = {};
-  overlayEnabled: boolean;
   padding: string;
 
   legendColumnTitleStyle: ComponentStyle;
@@ -85,7 +79,8 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
 
   private timeSeriesChart: TbTimeSeriesChart;
 
-  constructor(private imagePipe: ImagePipe,
+  constructor(@Optional() public widgetComponent: WidgetComponent,
+              private imagePipe: ImagePipe,
               private sanitizer: DomSanitizer,
               private renderer: Renderer2,
               private cd: ChangeDetectorRef) {
@@ -97,8 +92,7 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
 
     this.backgroundStyle$ = backgroundStyle(this.settings.background, this.imagePipe, this.sanitizer);
     this.overlayStyle = overlayStyle(this.settings.background.overlay);
-    this.overlayEnabled = this.settings.background.overlay.enabled;
-    this.padding = this.overlayEnabled ? undefined : this.settings.padding;
+    this.padding = this.settings.background.overlay.enabled ? undefined : this.settings.padding;
 
     this.showLegend = this.settings.showLegend;
     if (this.showLegend) {
@@ -106,7 +100,7 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
       this.legendConfig = this.settings.legendConfig;
       this.legendKeys = this.legendData.keys;
       if (this.legendConfig.sortDataKeys) {
-        this.legendKeys = this.legendData.keys.sort((key1, key2) => key1.dataKey.label.localeCompare(key2.dataKey.label));
+        this.legendKeys = this.legendData.keys.sort((key1, key2) => compareLegendDataKeys(key1.dataKey, key2.dataKey));
       }
       this.legendKeys.forEach(legendKey => {
         legendKey.dataKey.settings = mergeDeep<TimeSeriesChartKeySettings>({} as TimeSeriesChartKeySettings,
@@ -135,7 +129,10 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
   }
 
   ngAfterViewInit() {
-    this.timeSeriesChart = new TbTimeSeriesChart(this.ctx, this.settings, this.chartShape.nativeElement, this.renderer);
+    this.timeSeriesChart = new TbTimeSeriesChart(this.ctx,
+      {...this.settings, sortSeries: this.showLegend && this.legendConfig.sortDataKeys},
+      this.chartShape.nativeElement, this.renderer);
+    this.ctx.widgetActions = this.timeSeriesChart.getWidgetActions();
   }
 
   ngOnDestroy() {
@@ -154,11 +151,17 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
     if (this.timeSeriesChart) {
       this.timeSeriesChart.update();
     }
+    if (this.reportMode) {
+      this.cd.detectChanges();
+    }
   }
 
   public onLatestDataUpdated() {
     if (this.timeSeriesChart) {
       this.timeSeriesChart.latestUpdated();
+    }
+    if (this.reportMode) {
+      this.cd.detectChanges();
     }
   }
 
@@ -171,6 +174,6 @@ export class TimeSeriesChartWidgetComponent implements OnInit, OnDestroy, AfterV
   }
 
   public toggleLegendKey(legendKey: LegendKey) {
-    this.timeSeriesChart.toggleKey(legendKey.dataKey);
+    this.timeSeriesChart.toggleKey(legendKey.dataKey, legendKey.dataIndex);
   }
 }

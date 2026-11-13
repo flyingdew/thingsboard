@@ -1,42 +1,28 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 package org.thingsboard.server.dao.model.sql;
-
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-import org.thingsboard.server.common.data.id.DeviceCredentialsId;
-import org.thingsboard.server.common.data.id.DeviceId;
-import org.thingsboard.server.common.data.security.DeviceCredentials;
-import org.thingsboard.server.common.data.security.DeviceCredentialsType;
-import org.thingsboard.server.dao.model.BaseEntity;
-import org.thingsboard.server.dao.model.BaseSqlEntity;
-import org.thingsboard.server.dao.model.ModelConstants;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import org.thingsboard.server.common.data.id.DeviceCredentialsId;
+import org.thingsboard.server.common.data.id.DeviceId;
+import org.thingsboard.server.common.data.security.DeviceCredentials;
+import org.thingsboard.server.common.data.security.DeviceCredentialsType;
+import org.thingsboard.server.dao.model.BaseVersionedEntity;
+import org.thingsboard.server.dao.model.ModelConstants;
+
 import java.util.UUID;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Entity
 @Table(name = ModelConstants.DEVICE_CREDENTIALS_TABLE_NAME)
-public final class DeviceCredentialsEntity extends BaseSqlEntity<DeviceCredentials> implements BaseEntity<DeviceCredentials> {
+public final class DeviceCredentialsEntity extends BaseVersionedEntity<DeviceCredentials> {
 
     @Column(name = ModelConstants.DEVICE_CREDENTIALS_DEVICE_ID_PROPERTY)
     private UUID deviceId;
@@ -56,10 +42,7 @@ public final class DeviceCredentialsEntity extends BaseSqlEntity<DeviceCredentia
     }
 
     public DeviceCredentialsEntity(DeviceCredentials deviceCredentials) {
-        if (deviceCredentials.getId() != null) {
-            this.setUuid(deviceCredentials.getId().getId());
-        }
-        this.setCreatedTime(deviceCredentials.getCreatedTime());
+        super(deviceCredentials);
         if (deviceCredentials.getDeviceId() != null) {
             this.deviceId = deviceCredentials.getDeviceId().getId();
         }
@@ -72,6 +55,7 @@ public final class DeviceCredentialsEntity extends BaseSqlEntity<DeviceCredentia
     public DeviceCredentials toData() {
         DeviceCredentials deviceCredentials = new DeviceCredentials(new DeviceCredentialsId(this.getUuid()));
         deviceCredentials.setCreatedTime(createdTime);
+        deviceCredentials.setVersion(version);
         if (deviceId != null) {
             deviceCredentials.setDeviceId(new DeviceId(deviceId));
         }

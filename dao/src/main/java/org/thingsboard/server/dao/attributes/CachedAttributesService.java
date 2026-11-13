@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.attributes;
 
 import com.google.common.util.concurrent.Futures;
@@ -24,22 +12,30 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.thingsboard.server.cache.TbCacheValueWrapper;
-import org.thingsboard.server.cache.TbTransactionalCache;
+import org.thingsboard.server.cache.VersionedTbCache;
 import org.thingsboard.server.common.data.AttributeScope;
 import org.thingsboard.server.common.data.EntityType;
+import org.thingsboard.server.common.data.ObjectType;
 import org.thingsboard.server.common.data.StringUtils;
+import org.thingsboard.server.common.data.edqs.AttributeKv;
 import org.thingsboard.server.common.data.id.DeviceProfileId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
+import org.thingsboard.server.common.data.kv.AttributesSaveResult;
+import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
+import org.thingsboard.server.common.data.util.TbPair;
+import org.thingsboard.server.common.msg.edqs.EdqsService;
 import org.thingsboard.server.common.stats.DefaultCounter;
 import org.thingsboard.server.common.stats.StatsFactory;
 import org.thingsboard.server.dao.cache.CacheExecutorService;
 import org.thingsboard.server.dao.service.Validator;
 import org.thingsboard.server.dao.sql.JpaExecutorService;
+import org.thingsboard.server.dao.sql.citus.CitusSettings;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -51,7 +47,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static org.thingsboard.server.dao.attributes.AttributeUtils.validate;
 
@@ -60,15 +55,18 @@ import static org.thingsboard.server.dao.attributes.AttributeUtils.validate;
 @Primary
 @Slf4j
 public class CachedAttributesService implements AttributesService {
+
     private static final String STATS_NAME = "attributes.cache";
     public static final String LOCAL_CACHE_TYPE = "caffeine";
 
     private final AttributesDao attributesDao;
     private final JpaExecutorService jpaExecutorService;
     private final CacheExecutorService cacheExecutorService;
+    private final EdqsService edqsService;
     private final DefaultCounter hitCounter;
     private final DefaultCounter missCounter;
-    private final TbTransactionalCache<AttributeCacheKey, AttributeKvEntry> cache;
+    private final VersionedTbCache<AttributeCacheKey, AttributeKvEntry> cache;
+    private final CitusSettings citusSettings;
     private ListeningExecutorService cacheExecutor;
 
     @Value("${cache.type:caffeine}")
@@ -78,13 +76,16 @@ public class CachedAttributesService implements AttributesService {
 
     public CachedAttributesService(AttributesDao attributesDao,
                                    JpaExecutorService jpaExecutorService,
-                                   StatsFactory statsFactory,
+                                   @Lazy EdqsService edqsService, StatsFactory statsFactory,
                                    CacheExecutorService cacheExecutorService,
-                                   TbTransactionalCache<AttributeCacheKey, AttributeKvEntry> cache) {
+                                   VersionedTbCache<AttributeCacheKey, AttributeKvEntry> cache,
+                                   CitusSettings citusSettings) {
         this.attributesDao = attributesDao;
         this.jpaExecutorService = jpaExecutorService;
+        this.edqsService = edqsService;
         this.cacheExecutorService = cacheExecutorService;
         this.cache = cache;
+        this.citusSettings = citusSettings;
 
         this.hitCounter = statsFactory.createDefaultCounter(STATS_NAME, "result", "hit");
         this.missCounter = statsFactory.createDefaultCounter(STATS_NAME, "result", "miss");
@@ -93,6 +94,12 @@ public class CachedAttributesService implements AttributesService {
     @PostConstruct
     public void init() {
         this.cacheExecutor = getExecutor(cacheType, cacheExecutorService);
+        if (citusSettings.isEnabled() && (StringUtils.isEmpty(cacheType) || LOCAL_CACHE_TYPE.equals(cacheType))) {
+            log.warn("Citus is enabled with the per-node caffeine cache (cache.type={}). Attribute deletion evicts " +
+                    "only the local node's cache, so in a multi-node cluster other nodes may serve a stale value for a " +
+                    "deleted and re-created attribute until the cache TTL expires. Use a shared cache (cache.type=redis) " +
+                    "for correct cross-node eviction.", cacheType);
+        }
     }
 
     /**
@@ -109,12 +116,6 @@ public class CachedAttributesService implements AttributesService {
         return cacheExecutorService.executor();
     }
 
-
-    @Override
-    public ListenableFuture<Optional<AttributeKvEntry>> find(TenantId tenantId, EntityId entityId, String scope, String attributeKey) {
-        return find(tenantId, entityId, AttributeScope.valueOf(scope), attributeKey);
-    }
-
     @Override
     public ListenableFuture<Optional<AttributeKvEntry>> find(TenantId tenantId, EntityId entityId, AttributeScope scope, String attributeKey) {
         validate(entityId, scope);
@@ -129,31 +130,18 @@ public class CachedAttributesService implements AttributesService {
                 return Optional.ofNullable(cachedAttributeKvEntry);
             } else {
                 missCounter.increment();
-                var cacheTransaction = cache.newTransactionForKey(attributeCacheKey);
-                try {
-                    Optional<AttributeKvEntry> result = attributesDao.find(tenantId, entityId, scope, attributeKey);
-                    cacheTransaction.putIfAbsent(attributeCacheKey, result.orElse(null));
-                    cacheTransaction.commit();
-                    return result;
-                } catch (Throwable e) {
-                    cacheTransaction.rollback();
-                    log.debug("Could not find attribute from cache: [{}] [{}] [{}]", entityId, scope, attributeKey, e);
-                    throw e;
-                }
+                Optional<AttributeKvEntry> result = attributesDao.find(tenantId, entityId, scope, attributeKey);
+                cache.put(attributeCacheKey, result.orElse(null));
+                return result;
             }
         });
-    }
-
-    @Override
-    public ListenableFuture<List<AttributeKvEntry>> find(TenantId tenantId, EntityId entityId, String scope, final Collection<String> attributeKeysNonUnique) {
-        return find(tenantId, entityId, AttributeScope.valueOf(scope), attributeKeysNonUnique);
     }
 
     @Override
     public ListenableFuture<List<AttributeKvEntry>> find(TenantId tenantId, EntityId entityId, AttributeScope scope, final Collection<String> attributeKeysNonUnique) {
         validate(entityId, scope);
         final var attributeKeys = new LinkedHashSet<>(attributeKeysNonUnique); // deduplicate the attributes
-        attributeKeys.forEach(attributeKey -> Validator.validateString(attributeKey, k ->"Incorrect attribute key " + k));
+        attributeKeys.forEach(attributeKey -> Validator.validateString(attributeKey, k -> "Incorrect attribute key " + k));
 
         //CacheExecutor for Redis or DirectExecutor for local Caffeine
         return Futures.transformAsync(cacheExecutor.submit(() -> findCachedAttributes(entityId, scope, attributeKeys)),
@@ -162,7 +150,7 @@ public class CachedAttributesService implements AttributesService {
                     List<AttributeKvEntry> cachedAttributes = wrappedCachedAttributes.values().stream()
                             .map(TbCacheValueWrapper::get)
                             .filter(Objects::nonNull)
-                            .collect(Collectors.toList());
+                            .toList();
                     if (wrappedCachedAttributes.size() == attributeKeys.size()) {
                         log.trace("[{}][{}] Found all attributes from cache: {}", entityId, scope, attributeKeys);
                         return Futures.immediateFuture(cachedAttributes);
@@ -171,32 +159,21 @@ public class CachedAttributesService implements AttributesService {
                     Set<String> notFoundAttributeKeys = new HashSet<>(attributeKeys);
                     notFoundAttributeKeys.removeAll(wrappedCachedAttributes.keySet());
 
-                    List<AttributeCacheKey> notFoundKeys = notFoundAttributeKeys.stream().map(k -> new AttributeCacheKey(scope, entityId, k)).collect(Collectors.toList());
-
                     // DB call should run in DB executor, not in cache-related executor
                     return jpaExecutorService.submit(() -> {
-                        var cacheTransaction = cache.newTransactionForKeys(notFoundKeys);
-                        try {
-                            log.trace("[{}][{}] Lookup attributes from db: {}", entityId, scope, notFoundAttributeKeys);
-                            List<AttributeKvEntry> result = attributesDao.find(tenantId, entityId, scope, notFoundAttributeKeys);
-                            for (AttributeKvEntry foundInDbAttribute : result) {
-                                AttributeCacheKey attributeCacheKey = new AttributeCacheKey(scope, entityId, foundInDbAttribute.getKey());
-                                cacheTransaction.putIfAbsent(attributeCacheKey, foundInDbAttribute);
-                                notFoundAttributeKeys.remove(foundInDbAttribute.getKey());
-                            }
-                            for (String key : notFoundAttributeKeys) {
-                                cacheTransaction.putIfAbsent(new AttributeCacheKey(scope, entityId, key), null);
-                            }
-                            List<AttributeKvEntry> mergedAttributes = new ArrayList<>(cachedAttributes);
-                            mergedAttributes.addAll(result);
-                            cacheTransaction.commit();
-                            log.trace("[{}][{}] Commit cache transaction: {}", entityId, scope, notFoundAttributeKeys);
-                            return mergedAttributes;
-                        } catch (Throwable e) {
-                            cacheTransaction.rollback();
-                            log.debug("Could not find attributes from cache: [{}] [{}] [{}]", entityId, scope, notFoundAttributeKeys, e);
-                            throw e;
+                        log.trace("[{}][{}] Lookup attributes from db: {}", entityId, scope, notFoundAttributeKeys);
+                        List<AttributeKvEntry> result = attributesDao.find(tenantId, entityId, scope, notFoundAttributeKeys);
+                        for (AttributeKvEntry foundInDbAttribute : result) {
+                            put(entityId, scope, foundInDbAttribute);
+                            notFoundAttributeKeys.remove(foundInDbAttribute.getKey());
                         }
+                        for (String key : notFoundAttributeKeys) {
+                            cache.put(new AttributeCacheKey(scope, entityId, key), null);
+                        }
+                        List<AttributeKvEntry> mergedAttributes = new ArrayList<>(cachedAttributes);
+                        mergedAttributes.addAll(result);
+                        log.trace("[{}][{}] Commit cache transaction: {}", entityId, scope, notFoundAttributeKeys);
+                        return mergedAttributes;
                     });
 
                 }, MoreExecutors.directExecutor()); // cacheExecutor analyse and returns results or submit to DB executor
@@ -217,11 +194,6 @@ public class CachedAttributesService implements AttributesService {
     }
 
     @Override
-    public ListenableFuture<List<AttributeKvEntry>> findAll(TenantId tenantId, EntityId entityId, String scope) {
-        return findAll(tenantId, entityId, AttributeScope.valueOf(scope));
-    }
-
-    @Override
     public ListenableFuture<List<AttributeKvEntry>> findAll(TenantId tenantId, EntityId entityId, AttributeScope scope) {
         validate(entityId, scope);
         // We can`t watch on cache because the keys are unknown.
@@ -234,76 +206,101 @@ public class CachedAttributesService implements AttributesService {
     }
 
     @Override
-    public List<String> findAllKeysByEntityIds(TenantId tenantId, EntityType entityType, List<EntityId> entityIds) {
-        return findAllKeysByEntityIds(tenantId, entityIds);
-    }
-
-    @Override
     public List<String> findAllKeysByEntityIds(TenantId tenantId, List<EntityId> entityIds) {
         return attributesDao.findAllKeysByEntityIds(tenantId, entityIds);
     }
 
     @Override
-    public List<String> findAllKeysByEntityIds(TenantId tenantId, List<EntityId> entityIds, String scope) {
-        if (StringUtils.isEmpty(scope)) {
+    public List<String> findAllKeysByEntityIdsAndScope(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        if (scope == null) {
             return attributesDao.findAllKeysByEntityIds(tenantId, entityIds);
         } else {
-            return attributesDao.findAllKeysByEntityIdsAndAttributeType(tenantId, entityIds, scope);
+            return attributesDao.findAllKeysByEntityIdsAndScope(tenantId, entityIds, scope);
         }
     }
 
     @Override
-    public ListenableFuture<String> save(TenantId tenantId, EntityId entityId, String scope, AttributeKvEntry attribute) {
-        return save(tenantId, entityId, AttributeScope.valueOf(scope), attribute);
+    public ListenableFuture<List<String>> findAllKeysByEntityIdsAndScopeAsync(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        return attributesDao.findAllKeysByEntityIdsAndScopeAsync(tenantId, entityIds, scope);
     }
 
     @Override
-    public ListenableFuture<String> save(TenantId tenantId, EntityId entityId, AttributeScope scope, AttributeKvEntry attribute) {
+    public List<AttributeKvEntry> findLatestByEntityIdsAndScope(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        return attributesDao.findLatestByEntityIdsAndScope(tenantId, entityIds, scope);
+    }
+
+    @Override
+    public ListenableFuture<List<AttributeKvEntry>> findLatestByEntityIdsAndScopeAsync(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        return attributesDao.findLatestByEntityIdsAndScopeAsync(tenantId, entityIds, scope);
+    }
+
+    @Override
+    public ListenableFuture<AttributesSaveResult> save(TenantId tenantId, EntityId entityId, AttributeScope scope, AttributeKvEntry attribute) {
         validate(entityId, scope);
         AttributeUtils.validate(attribute, valueNoXssValidation);
-        ListenableFuture<String> future = attributesDao.save(tenantId, entityId, scope, attribute);
-        return Futures.transform(future, key -> evict(entityId, scope, attribute, key), cacheExecutor);
+        return doSave(tenantId, entityId, scope, List.of(attribute));
     }
 
     @Override
-    public ListenableFuture<List<String>> save(TenantId tenantId, EntityId entityId, String scope, List<AttributeKvEntry> attributes) {
-        return save(tenantId, entityId, AttributeScope.valueOf(scope), attributes);
-    }
-
-    @Override
-    public ListenableFuture<List<String>> save(TenantId tenantId, EntityId entityId, AttributeScope scope, List<AttributeKvEntry> attributes) {
+    public ListenableFuture<AttributesSaveResult> save(TenantId tenantId, EntityId entityId, AttributeScope scope, List<AttributeKvEntry> attributes) {
         validate(entityId, scope);
         AttributeUtils.validate(attributes, valueNoXssValidation);
+        return doSave(tenantId, entityId, scope, attributes);
+    }
 
-        List<ListenableFuture<String>> futures = new ArrayList<>(attributes.size());
+    private ListenableFuture<AttributesSaveResult> doSave(TenantId tenantId, EntityId entityId, AttributeScope scope, List<AttributeKvEntry> attributes) {
+        List<ListenableFuture<Long>> futures = new ArrayList<>(attributes.size());
         for (var attribute : attributes) {
-            ListenableFuture<String> future = attributesDao.save(tenantId, entityId, scope, attribute);
-            futures.add(Futures.transform(future, key -> evict(entityId, scope, attribute, key), cacheExecutor));
+            ListenableFuture<Long> future = Futures.transform(attributesDao.save(tenantId, entityId, scope, attribute), version -> {
+                BaseAttributeKvEntry attributeKvEntry = new BaseAttributeKvEntry(((BaseAttributeKvEntry) attribute).getKv(), attribute.getLastUpdateTs(), version);
+                put(entityId, scope, attributeKvEntry);
+                TenantId edqsTenantId = entityId.getEntityType() == EntityType.TENANT ? (TenantId) entityId : tenantId;
+                edqsService.onUpdate(edqsTenantId, ObjectType.ATTRIBUTE_KV, new AttributeKv(entityId, scope, attributeKvEntry, version));
+                return version;
+            }, cacheExecutor);
+            futures.add(future);
         }
-
-        return Futures.allAsList(futures);
+        return Futures.transform(Futures.allAsList(futures), AttributesSaveResult::of, MoreExecutors.directExecutor());
     }
 
-    private String evict(EntityId entityId, AttributeScope scope, AttributeKvEntry attribute, String key) {
-        log.trace("[{}][{}][{}] Before cache evict: {}", entityId, scope, key, attribute);
-        cache.evictOrPut(new AttributeCacheKey(scope, entityId, key), attribute);
-        log.trace("[{}][{}][{}] after cache evict.", entityId, scope, key);
-        return key;
-    }
-
-    @Override
-    public ListenableFuture<List<String>> removeAll(TenantId tenantId, EntityId entityId, String scope, List<String> attributeKeys) {
-        return removeAll(tenantId, entityId, AttributeScope.valueOf(scope), attributeKeys);
+    private void put(EntityId entityId, AttributeScope scope, AttributeKvEntry attribute) {
+        String key = attribute.getKey();
+        log.trace("[{}][{}][{}] Before cache put: {}", entityId, scope, key, attribute);
+        cache.put(new AttributeCacheKey(scope, entityId, key), attribute);
+        log.trace("[{}][{}][{}] after cache put.", entityId, scope, key);
     }
 
     @Override
     public ListenableFuture<List<String>> removeAll(TenantId tenantId, EntityId entityId, AttributeScope scope, List<String> attributeKeys) {
         validate(entityId, scope);
-        List<ListenableFuture<String>> futures = attributesDao.removeAll(tenantId, entityId, scope, attributeKeys);
-        return Futures.allAsList(futures.stream().map(future -> Futures.transform(future, key -> {
-            cache.evict(new AttributeCacheKey(scope, entityId, key));
+        List<ListenableFuture<TbPair<String, Long>>> futures = attributesDao.removeAllWithVersions(tenantId, entityId, scope, attributeKeys);
+        return Futures.allAsList(futures.stream().map(future -> Futures.transform(future, keyVersionPair -> {
+            String key = keyVersionPair.getFirst();
+            Long version = keyVersionPair.getSecond();
+            AttributeCacheKey cacheKey = new AttributeCacheKey(scope, entityId, key);
+            if (citusSettings.isEnabled()) {
+                // Citus uses a per-row version: after a delete a re-inserted row's version resets to 1, so a
+                // version-guarded evict could be rejected by the cache that still holds the higher version of the
+                // just-deleted row. Evict unconditionally and let the next read repopulate from DB.
+                // This is only correct with a shared cache (e.g. Redis), where the evict reaches all nodes. With the
+                // per-node caffeine cache the evict clears only the local node: another node still holding the
+                // pre-delete entry rejects the re-created row's version-1 put and serves the stale value until TTL.
+                // Even with shared Redis a race remains: a reader that fetched the row just before this DELETE
+                // committed can run its read-through cache.put AFTER this evict, leaving the cache serving the
+                // deleted value. Because versioned puts are strict-greater, a re-created row (per-row version
+                // restarting at 1) cannot displace that stale entry until the cache TTL expires. This is the
+                // documented "self-heals at cache TTL" acceptance for the delete+re-create race.
+                // See the startup warning in init().
+                cache.evict(cacheKey);
+            } else {
+                cache.evict(cacheKey, version);
+            }
+            if (version != null) {
+                TenantId edqsTenantId = entityId.getEntityType() == EntityType.TENANT ? (TenantId) entityId : tenantId;
+                edqsService.onDelete(edqsTenantId, ObjectType.ATTRIBUTE_KV, new AttributeKv(entityId, scope, key, version));
+            }
             return key;
-        }, cacheExecutor)).collect(Collectors.toList()));
+        }, cacheExecutor)).toList());
     }
 
     @Override
@@ -314,6 +311,8 @@ public class CachedAttributesService implements AttributesService {
             String key = deleted.getValue();
             if (scope != null && key != null) {
                 cache.evict(new AttributeCacheKey(scope, entityId, key));
+                // using version as Long.MAX_VALUE because we expect that the entity is deleted and there won't be any attributes after this
+                edqsService.onDelete(tenantId, ObjectType.ATTRIBUTE_KV, new AttributeKv(entityId, scope, key, Long.MAX_VALUE));
             }
         });
         return result.size();

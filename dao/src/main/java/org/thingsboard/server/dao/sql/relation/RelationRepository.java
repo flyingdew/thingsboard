@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.sql.relation;
 
 import org.springframework.data.domain.Pageable;
@@ -36,6 +24,15 @@ public interface RelationRepository
                                                                         String fromType,
                                                                         String relationTypeGroup);
 
+    // One array parameter instead of an IN list: a constant statement shape for any batch size, served by
+    // idx_relation_from_id. relation is a Citus reference table, so this stays a single-placement read.
+    @Query(value = "SELECT from_id, from_type, relation_type_group, relation_type, to_id, to_type, additional_info, version" +
+            " FROM relation WHERE from_id = ANY(:fromIds) AND from_type = :fromType AND relation_type_group = :relationTypeGroup",
+            nativeQuery = true)
+    List<RelationEntity> findAllByFromIdsAndFromTypeAndRelationTypeGroup(@Param("fromIds") UUID[] fromIds,
+                                                                         @Param("fromType") String fromType,
+                                                                         @Param("relationTypeGroup") String relationTypeGroup);
+
     List<RelationEntity> findAllByFromIdAndFromTypeAndRelationTypeGroupIn(UUID fromId,
                                                                           String fromType,
                                                                           List<String> relationTypeGroups);
@@ -57,9 +54,6 @@ public interface RelationRepository
                                                                                    String toType,
                                                                                    String relationType,
                                                                                    String relationTypeGroup);
-
-    List<RelationEntity> findAllByFromIdAndFromType(UUID fromId,
-                                                    String fromType);
 
     @Query("SELECT r FROM RelationEntity r WHERE " +
             "r.relationTypeGroup = 'RULE_NODE' AND r.toType = 'RULE_CHAIN' " +
@@ -86,5 +80,17 @@ public interface RelationRepository
     @Modifying
     @Query("DELETE FROM RelationEntity r where r.fromId = :fromId and r.fromType = :fromType and r.relationTypeGroup in :relationTypeGroups")
     void deleteByFromIdAndFromTypeAndRelationTypeGroupIn(@Param("fromId") UUID fromId, @Param("fromType") String fromType, @Param("relationTypeGroups") List<String> relationTypeGroups);
+
+    @Query(value = "SELECT from_id, from_type, relation_type_group, relation_type, to_id, to_type, additional_info, version FROM relation" +
+            " WHERE (from_id, from_type, relation_type_group, relation_type, to_id, to_type) > " +
+            "(:fromId, :fromType, :relationTypeGroup, :relationType, :toId, :toType) ORDER BY " +
+            "from_id, from_type, relation_type_group, relation_type, to_id, to_type LIMIT :batchSize", nativeQuery = true)
+    List<RelationEntity> findNextBatch(@Param("fromId") UUID fromId,
+                                       @Param("fromType") String fromType,
+                                       @Param("relationTypeGroup") String relationTypeGroup,
+                                       @Param("relationType") String relationType,
+                                       @Param("toId") UUID toId,
+                                       @Param("toType") String toType,
+                                       @Param("batchSize") int batchSize);
 
 }

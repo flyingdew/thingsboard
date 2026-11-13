@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   ECharts,
   EChartsOption,
@@ -23,13 +10,12 @@ import {
   autoDateFormat,
   AutoDateFormatSettings,
   ComponentStyle,
-  DateFormatProcessor,
-  DateFormatSettings,
   Font,
-  tsToFormatTimeUnit
+  tsToFormatTimeUnit,
+  ValueSourceConfig,
+  ValueSourceType
 } from '@shared/models/widget-settings.models';
 import {
-  CallbackDataParams,
   TimeAxisBandWidthCalculator,
   VisualMapComponentOption,
   XAXisOption,
@@ -45,7 +31,8 @@ import {
   isUndefined,
   isUndefinedOrNull,
   mergeDeep,
-  parseFunction
+  parseFunction,
+  plainColorFromVariable
 } from '@core/utils';
 import tinycolor from 'tinycolor2';
 import { TimeAxisBaseOption, ValueAxisBaseOption } from 'echarts/types/src/coord/axisCommonTypes';
@@ -66,7 +53,6 @@ import {
   FormattedData,
   WidgetComparisonSettings
 } from '@shared/models/widget.models';
-import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
 import { AbstractControl, ValidationErrors } from '@angular/forms';
 import { MarkLine2DDataItemOption } from 'echarts/types/src/component/marker/MarkLineModel';
 import { DatePipe } from '@angular/common';
@@ -74,12 +60,10 @@ import { BuiltinTextPosition } from 'zrender/src/core/types';
 import { CartesianAxisOption } from 'echarts/types/src/coord/cartesian/AxisModel';
 import {
   calculateAggIntervalWithWidgetTimeWindow,
-  Interval,
   IntervalMath,
   WidgetTimewindow
 } from '@shared/models/time/time.models';
 import { UtilsService } from '@core/services/utils.service';
-import { Renderer2 } from '@angular/core';
 import {
   chartAnimationDefaultSettings,
   ChartAnimationSettings,
@@ -88,7 +72,8 @@ import {
   chartColorScheme,
   ChartFillSettings,
   ChartFillType,
-  ChartLabelPosition, ChartLineType,
+  ChartLabelPosition,
+  ChartLineType,
   ChartShape,
   createChartTextStyle,
   createLinearOpacityGradient,
@@ -96,6 +81,14 @@ import {
   prepareChartThemeColor
 } from '@home/components/widget/lib/chart/chart.models';
 import { BarSeriesLabelOption } from 'echarts/types/src/chart/bar/BarSeries';
+import {
+  TimeSeriesChartTooltipTrigger,
+  TimeSeriesChartTooltipValueFormatFunction,
+  TimeSeriesChartTooltipWidgetSettings
+} from '@home/components/widget/lib/chart/time-series-chart-tooltip.models';
+import { TbUnit, TbUnitConverter } from '@shared/models/unit.models';
+import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
+import { DataKeysCallbacks } from '@home/components/widget/lib/settings/common/key/data-keys.component.models';
 
 type TimeSeriesChartDataEntry = [number, any, number, number];
 
@@ -125,9 +118,6 @@ const toTimeSeriesChartDataEntry = (entry: DataEntry, valueConverter?: (value: a
   return item;
 };
 
-export type TimeSeriesChartTooltipValueFormatFunction =
-  (value: any, latestData: FormattedData, units?: string, decimals?: number) => string;
-
 export interface TimeSeriesChartDataItem {
   id: string;
   datasource: Datasource;
@@ -143,8 +133,9 @@ export interface TimeSeriesChartDataItem {
   xAxisIndex: number;
   yAxisId: TimeSeriesChartYAxisId;
   yAxisIndex: number;
-  option?: LineSeriesOption | CustomSeriesOption;
+  option?: LineSeriesOption;
   barRenderContext?: BarRenderContext;
+  unitConvertor?: TbUnitConverter;
 }
 
 export const timeAxisBandWidthCalculator: TimeAxisBandWidthCalculator = (model) => {
@@ -212,245 +203,6 @@ export const adjustTimeAxisExtentToData = (timeAxisOption: TimeAxisBaseOption,
   }
   timeAxisOption.min = (typeof min !== 'undefined' && Math.abs(min - defaultMin) < 1000) ? min : defaultMin;
   timeAxisOption.max = (typeof max !== 'undefined' && Math.abs(max - defaultMax) < 1000) ? max : defaultMax;
-};
-
-export enum TimeSeriesChartTooltipTrigger {
-  point = 'point',
-  axis = 'axis'
-}
-
-export const tooltipTriggerTranslationMap = new Map<TimeSeriesChartTooltipTrigger, string>(
-  [
-    [ TimeSeriesChartTooltipTrigger.point, 'tooltip.trigger-point' ],
-    [ TimeSeriesChartTooltipTrigger.axis, 'tooltip.trigger-axis' ]
-  ]
-);
-
-export interface TimeSeriesChartTooltipWidgetSettings {
-  showTooltip: boolean;
-  tooltipTrigger?: TimeSeriesChartTooltipTrigger;
-  tooltipShowFocusedSeries?: boolean;
-  tooltipLabelFont: Font;
-  tooltipLabelColor: string;
-  tooltipValueFont: Font;
-  tooltipValueColor: string;
-  tooltipValueFormatter?: string | TimeSeriesChartTooltipValueFormatFunction;
-  tooltipShowDate: boolean;
-  tooltipDateInterval?: boolean;
-  tooltipDateFormat: DateFormatSettings;
-  tooltipDateFont: Font;
-  tooltipDateColor: string;
-  tooltipBackgroundColor: string;
-  tooltipBackgroundBlur: number;
-}
-
-export const createTooltipValueFormatFunction =
-  (tooltipValueFormatter: string | TimeSeriesChartTooltipValueFormatFunction): TimeSeriesChartTooltipValueFormatFunction => {
-    let tooltipValueFormatFunction: TimeSeriesChartTooltipValueFormatFunction;
-    if (isFunction(tooltipValueFormatter)) {
-      tooltipValueFormatFunction = tooltipValueFormatter as TimeSeriesChartTooltipValueFormatFunction;
-    } else if (typeof tooltipValueFormatter === 'string' && tooltipValueFormatter.length) {
-      try {
-        tooltipValueFormatFunction =
-          new Function('value', 'latestData', tooltipValueFormatter) as TimeSeriesChartTooltipValueFormatFunction;
-      } catch (e) {}
-    }
-    return tooltipValueFormatFunction;
-  };
-
-export const timeSeriesChartTooltipFormatter = (renderer: Renderer2,
-                                                tooltipDateFormat: DateFormatProcessor,
-                                                settings: TimeSeriesChartTooltipWidgetSettings,
-                                                params: CallbackDataParams[] | CallbackDataParams,
-                                                valueFormatFunction: TimeSeriesChartTooltipValueFormatFunction,
-                                                focusedSeriesIndex: number,
-                                                series?: TimeSeriesChartDataItem[],
-                                                interval?: Interval): null | HTMLElement => {
-
-  const tooltipParams = mapTooltipParams(params, series, focusedSeriesIndex);
-  if (!tooltipParams.items.length && !tooltipParams.comparisonItems.length) {
-    return null;
-  }
-
-  const tooltipElement: HTMLElement = renderer.createElement('div');
-  renderer.setStyle(tooltipElement, 'display', 'flex');
-  renderer.setStyle(tooltipElement, 'flex-direction', 'column');
-  renderer.setStyle(tooltipElement, 'align-items', 'flex-start');
-  renderer.setStyle(tooltipElement, 'gap', '16px');
-
-  buildItemsTooltip(tooltipElement, tooltipParams.items, renderer, tooltipDateFormat, settings, valueFormatFunction, interval);
-  buildItemsTooltip(tooltipElement, tooltipParams.comparisonItems, renderer, tooltipDateFormat, settings, valueFormatFunction, interval);
-
-  return tooltipElement;
-};
-
-interface TooltipItem {
-  param: CallbackDataParams;
-  dataItem: TimeSeriesChartDataItem;
-}
-
-interface TooltipParams {
-  items: TooltipItem[];
-  comparisonItems: TooltipItem[];
-}
-
-const buildItemsTooltip = (tooltipElement: HTMLElement,
-                           items: TooltipItem[],
-                           renderer: Renderer2,
-                           tooltipDateFormat: DateFormatProcessor,
-                           settings: TimeSeriesChartTooltipWidgetSettings,
-                           valueFormatFunction: TimeSeriesChartTooltipValueFormatFunction,
-                           interval?: Interval) => {
-  if (items.length) {
-    const tooltipItemsElement: HTMLElement = renderer.createElement('div');
-    renderer.setStyle(tooltipItemsElement, 'display', 'flex');
-    renderer.setStyle(tooltipItemsElement, 'flex-direction', 'column');
-    renderer.setStyle(tooltipItemsElement, 'align-items', 'flex-start');
-    renderer.setStyle(tooltipItemsElement, 'gap', '4px');
-    renderer.appendChild(tooltipElement, tooltipItemsElement);
-    if (settings.tooltipShowDate) {
-      renderer.appendChild(tooltipItemsElement,
-        constructTooltipDateElement(renderer, tooltipDateFormat, settings, items[0].param, interval));
-    }
-    for (const item of items) {
-      renderer.appendChild(tooltipItemsElement,
-        constructTooltipSeriesElement(renderer, settings, item, valueFormatFunction));
-    }
-  }
-};
-
-const mapTooltipParams = (params: CallbackDataParams[] | CallbackDataParams,
-                          series?: TimeSeriesChartDataItem[],
-                          focusedSeriesIndex?: number): TooltipParams => {
-  const result: TooltipParams = {
-    items: [],
-    comparisonItems: []
-  };
-  if (!params || Array.isArray(params) && !params[0]) {
-    return result;
-  }
-  const firstParam = Array.isArray(params) ? params[0] : params;
-  if (!firstParam.value) {
-    return result;
-  }
-  let seriesParams: CallbackDataParams = null;
-  if (Array.isArray(params) && focusedSeriesIndex > -1) {
-    seriesParams = params.find(param => param.seriesIndex === focusedSeriesIndex);
-  } else if (!Array.isArray(params)) {
-    seriesParams = params;
-  }
-  if (seriesParams) {
-    appendTooltipItem(result, seriesParams, series);
-  } else if (Array.isArray(params)) {
-    for (seriesParams of params) {
-      appendTooltipItem(result, seriesParams, series);
-    }
-  }
-  return result;
-};
-
-const appendTooltipItem = (tooltipParams: TooltipParams, seriesParams: CallbackDataParams, series?: TimeSeriesChartDataItem[]) => {
-  const dataItem = series?.find(s => s.id === seriesParams.seriesId);
-  const tooltipItem: TooltipItem = {
-    param: seriesParams,
-    dataItem
-  };
-  if (dataItem?.comparisonItem) {
-    tooltipParams.comparisonItems.push(tooltipItem);
-  } else {
-    tooltipParams.items.push(tooltipItem);
-  }
-};
-
-const constructTooltipDateElement = (renderer: Renderer2,
-                                     tooltipDateFormat: DateFormatProcessor,
-                                     settings: TimeSeriesChartTooltipWidgetSettings,
-                                     param: CallbackDataParams,
-                                     interval?: Interval): HTMLElement => {
-  const dateElement: HTMLElement = renderer.createElement('div');
-  let dateText: string;
-  const startTs = param.value[2];
-  const endTs = param.value[3];
-  if (settings.tooltipDateInterval && startTs && endTs && (endTs - 1) > startTs) {
-    const startDateText = tooltipDateFormat.update(startTs, interval);
-    const endDateText = tooltipDateFormat.update(endTs - 1, interval);
-    if (startDateText === endDateText) {
-      dateText = startDateText;
-    } else {
-      dateText = startDateText + ' - ' + endDateText;
-    }
-  } else {
-    const ts = param.value[0];
-    dateText = tooltipDateFormat.update(ts, interval);
-  }
-  renderer.appendChild(dateElement, renderer.createText(dateText));
-  renderer.setStyle(dateElement, 'font-family', settings.tooltipDateFont.family);
-  renderer.setStyle(dateElement, 'font-size', settings.tooltipDateFont.size + settings.tooltipDateFont.sizeUnit);
-  renderer.setStyle(dateElement, 'font-style', settings.tooltipDateFont.style);
-  renderer.setStyle(dateElement, 'font-weight', settings.tooltipDateFont.weight);
-  renderer.setStyle(dateElement, 'line-height', settings.tooltipDateFont.lineHeight);
-  renderer.setStyle(dateElement, 'color', settings.tooltipDateColor);
-  return dateElement;
-};
-
-const constructTooltipSeriesElement = (renderer: Renderer2,
-                                       settings: TimeSeriesChartTooltipWidgetSettings,
-                                       item: TooltipItem,
-                                       valueFormatFunction: TimeSeriesChartTooltipValueFormatFunction): HTMLElement => {
-  const labelValueElement: HTMLElement = renderer.createElement('div');
-  renderer.setStyle(labelValueElement, 'display', 'flex');
-  renderer.setStyle(labelValueElement, 'flex-direction', 'row');
-  renderer.setStyle(labelValueElement, 'align-items', 'center');
-  renderer.setStyle(labelValueElement, 'align-self', 'stretch');
-  renderer.setStyle(labelValueElement, 'gap', '12px');
-  const labelElement: HTMLElement = renderer.createElement('div');
-  renderer.setStyle(labelElement, 'display', 'flex');
-  renderer.setStyle(labelElement, 'align-items', 'center');
-  renderer.setStyle(labelElement, 'gap', '8px');
-  renderer.appendChild(labelValueElement, labelElement);
-  const circleElement: HTMLElement = renderer.createElement('div');
-  renderer.setStyle(circleElement, 'width', '8px');
-  renderer.setStyle(circleElement, 'height', '8px');
-  renderer.setStyle(circleElement, 'border-radius', '50%');
-  renderer.setStyle(circleElement, 'background', item.param.color);
-  renderer.appendChild(labelElement, circleElement);
-  const labelTextElement: HTMLElement = renderer.createElement('div');
-  renderer.appendChild(labelTextElement, renderer.createText(item.param.seriesName));
-  renderer.setStyle(labelTextElement, 'font-family', settings.tooltipLabelFont.family);
-  renderer.setStyle(labelTextElement, 'font-size', settings.tooltipLabelFont.size + settings.tooltipLabelFont.sizeUnit);
-  renderer.setStyle(labelTextElement, 'font-style', settings.tooltipLabelFont.style);
-  renderer.setStyle(labelTextElement, 'font-weight', settings.tooltipLabelFont.weight);
-  renderer.setStyle(labelTextElement, 'line-height', settings.tooltipLabelFont.lineHeight);
-  renderer.setStyle(labelTextElement, 'color', settings.tooltipLabelColor);
-  renderer.appendChild(labelElement, labelTextElement);
-  const valueElement: HTMLElement = renderer.createElement('div');
-  let formatFunction = valueFormatFunction;
-  let latestData: FormattedData;
-  let units = '';
-  let decimals = 0;
-  if (item.dataItem) {
-    if (item.dataItem.tooltipValueFormatFunction) {
-      formatFunction = item.dataItem.tooltipValueFormatFunction;
-    }
-    latestData = item.dataItem.latestData;
-    units = item.dataItem.units;
-    decimals = item.dataItem.decimals;
-  }
-  if (!latestData) {
-    latestData = {} as FormattedData;
-  }
-  const value = formatFunction(item.param.value[1], latestData, units, decimals);
-  renderer.appendChild(valueElement, renderer.createText(value));
-  renderer.setStyle(valueElement, 'flex', '1');
-  renderer.setStyle(valueElement, 'text-align', 'end');
-  renderer.setStyle(valueElement, 'font-family', settings.tooltipValueFont.family);
-  renderer.setStyle(valueElement, 'font-size', settings.tooltipValueFont.size + settings.tooltipValueFont.sizeUnit);
-  renderer.setStyle(valueElement, 'font-style', settings.tooltipValueFont.style);
-  renderer.setStyle(valueElement, 'font-weight', settings.tooltipValueFont.weight);
-  renderer.setStyle(valueElement, 'line-height', settings.tooltipValueFont.lineHeight);
-  renderer.setStyle(valueElement, 'color', settings.tooltipValueColor);
-  renderer.appendChild(labelValueElement, valueElement);
-  return labelValueElement;
 };
 
 
@@ -521,23 +273,6 @@ export const timeSeriesThresholdLabelPositionTranslations = new Map<ThresholdLab
     [ThresholdLabelPosition.insideEndBottom, 'widgets.time-series-chart.threshold.label-position-inside-end-bottom']
   ]
 );
-
-export enum TimeSeriesChartThresholdType {
-  constant = 'constant',
-  latestKey = 'latestKey',
-  entity = 'entity'
-}
-
-export const timeSeriesThresholdTypes = Object.keys(TimeSeriesChartThresholdType) as TimeSeriesChartThresholdType[];
-
-export const timeSeriesThresholdTypeTranslations = new Map<TimeSeriesChartThresholdType, string>(
-  [
-    [TimeSeriesChartThresholdType.constant, 'widgets.time-series-chart.threshold.type-constant'],
-    [TimeSeriesChartThresholdType.latestKey, 'widgets.time-series-chart.threshold.type-latest-key'],
-    [TimeSeriesChartThresholdType.entity, 'widgets.time-series-chart.threshold.type-entity']
-  ]
-);
-
 
 export enum TimeSeriesChartStateSourceType {
   constant = 'constant',
@@ -632,12 +367,12 @@ export type TimeSeriesChartTicksFormatter =
 export interface TimeSeriesChartYAxisSettings extends TimeSeriesChartAxisSettings {
   id?: TimeSeriesChartYAxisId;
   order?: number;
-  units?: string;
+  units?: TbUnit;
   decimals?: number;
   interval?: number;
   splitNumber?: number;
-  min?: number | string;
-  max?: number | string;
+  min?: number | string | ValueSourceConfig;
+  max?: number | string | ValueSourceConfig;
   ticksGenerator?: TimeSeriesChartTicksGenerator | string;
   ticksFormatter?: TimeSeriesChartTicksFormatter | string;
 }
@@ -737,14 +472,7 @@ export const defaultTimeSeriesChartXAxisSettings: TimeSeriesChartXAxisSettings =
 
 export type TimeSeriesChartYAxes = {[id: TimeSeriesChartYAxisId]: TimeSeriesChartYAxisSettings};
 
-export interface TimeSeriesChartThreshold {
-  type: TimeSeriesChartThresholdType;
-  value?: number;
-  latestKey?: string;
-  latestKeyType?: DataKeyType.attribute | DataKeyType.timeseries;
-  entityAlias?: string;
-  entityKey?: string;
-  entityKeyType?: DataKeyType.attribute | DataKeyType.timeseries;
+export interface TimeSeriesChartThreshold extends ValueSourceConfig {
   yAxisId: TimeSeriesChartYAxisId;
   units?: string;
   decimals?: number;
@@ -769,17 +497,17 @@ export const timeSeriesChartThresholdValid = (threshold: TimeSeriesChartThreshol
     return false;
   }
   switch (threshold.type) {
-    case TimeSeriesChartThresholdType.constant:
+    case ValueSourceType.constant:
       if (isUndefinedOrNull(threshold.value)) {
         return false;
       }
       break;
-    case TimeSeriesChartThresholdType.latestKey:
+    case ValueSourceType.latestKey:
       if (!threshold.latestKey || !threshold.latestKeyType) {
         return false;
       }
       break;
-    case TimeSeriesChartThresholdType.entity:
+    case ValueSourceType.entity:
       if (!threshold.entityAlias || !threshold.entityKey || !threshold.entityKeyType) {
         return false;
       }
@@ -799,7 +527,7 @@ export const timeSeriesChartThresholdValidator = (control: AbstractControl): Val
 };
 
 export const timeSeriesChartThresholdDefaultSettings: TimeSeriesChartThreshold = {
-  type: TimeSeriesChartThresholdType.constant,
+  type: ValueSourceType.constant,
   yAxisId: 'default',
   units: null,
   decimals: 0,
@@ -817,7 +545,7 @@ export const timeSeriesChartThresholdDefaultSettings: TimeSeriesChartThreshold =
     size: 12,
     sizeUnit: 'px',
     style: 'normal',
-    weight: '400',
+    weight: 'normal',
     lineHeight: '1'
   },
   labelColor: chartColorScheme['threshold.label'].light,
@@ -882,7 +610,7 @@ export interface TimeSeriesChartVisualMapPiece {
 
 export const createTimeSeriesChartVisualMapPiece = (color: string, from?: number, to?: number): TimeSeriesChartVisualMapPiece => {
   const piece: TimeSeriesChartVisualMapPiece = {
-    color
+    color: plainColorFromVariable(color)
   };
   if (isNumber(from) && isNumber(to)) {
     if (from === to) {
@@ -959,7 +687,9 @@ export interface TimeSeriesChartSettings extends TimeSeriesChartTooltipWidgetSet
   thresholds: TimeSeriesChartThreshold[];
   darkMode: boolean;
   dataZoom: boolean;
+  dataZoomUpdateTimewindow: boolean;
   stack: boolean;
+  sortSeries: boolean;
   grid: TimeSeriesChartGridSettings;
   yAxes: TimeSeriesChartYAxes;
   xAxis: TimeSeriesChartXAxisSettings;
@@ -974,7 +704,9 @@ export const timeSeriesChartDefaultSettings: TimeSeriesChartSettings = {
   thresholds: [],
   darkMode: false,
   dataZoom: true,
+  dataZoomUpdateTimewindow: false,
   stack: false,
+  sortSeries: false,
   grid: mergeDeep({} as TimeSeriesChartGridSettings,
     timeSeriesChartGridDefaultSettings),
   yAxes: {
@@ -1024,6 +756,7 @@ export const timeSeriesChartDefaultSettings: TimeSeriesChartSettings = {
   },
   tooltipDateColor: 'rgba(0, 0, 0, 0.76)',
   tooltipDateInterval: true,
+  tooltipStackedShowTotal: false,
   tooltipBackgroundColor: 'rgba(255, 255, 255, 0.76)',
   tooltipBackgroundBlur: 4,
   comparisonEnabled: false,
@@ -1121,12 +854,16 @@ export interface TimeSeriesChartThresholdItem {
   value: TimeSeriesChartThresholdValue;
   settings: TimeSeriesChartThreshold;
   option?: LineSeriesOption;
+  unitConvertor?: TbUnitConverter
 }
 
 export interface TimeSeriesChartAxis {
   id: string;
   settings: TimeSeriesChartAxisSettings;
   option: CartesianAxisOption;
+  minLatestDataKey?: DataKey;
+  maxLatestDataKey?: DataKey;
+  unitConvertor?: (value: number) => number;
 }
 
 export interface TimeSeriesChartYAxis extends TimeSeriesChartAxis {
@@ -1144,7 +881,8 @@ export const createTimeSeriesYAxis = (units: string,
                                       decimals: number,
                                       settings: TimeSeriesChartYAxisSettings,
                                       utils: UtilsService,
-                                      darkMode: boolean): TimeSeriesChartYAxis => {
+                                      darkMode: boolean,
+                                      unitConvertor: (x: number) => number): TimeSeriesChartYAxis => {
   const yAxisTickLabelStyle = createChartTextStyle(settings.tickLabelFont,
     settings.tickLabelColor, darkMode, 'axis.tickLabel');
   const yAxisNameStyle = createChartTextStyle(settings.labelFont,
@@ -1185,6 +923,29 @@ export const createTimeSeriesYAxis = (units: string,
       return ticks?.filter(tick => tick.value >= extent[0] && tick.value <= extent[1]);
     };
   }
+
+  let initialMin: number | string | undefined;
+  if (isDefinedAndNotNull(settings.min)) {
+    if (typeof settings.min === 'object' && 'type' in settings.min) {
+      initialMin = undefined;
+    } else if (typeof settings.min === 'number') {
+      initialMin = unitConvertor ? unitConvertor(settings.min) : settings.min;
+    } else if (typeof settings.min === 'string') {
+      initialMin = settings.min;
+    }
+  }
+
+  let initialMax: number | string | undefined;
+  if (isDefinedAndNotNull(settings.max)) {
+    if (typeof settings.max === 'object' && 'type' in settings.max) {
+      initialMax = undefined;
+    } else if (typeof settings.max === 'number') {
+      initialMax = unitConvertor ? unitConvertor(settings.max) : settings.max;
+    } else if (typeof settings.max === 'string') {
+      initialMax = settings.max;
+    }
+  }
+
   return {
     id: settings.id,
     decimals,
@@ -1198,8 +959,8 @@ export const createTimeSeriesYAxis = (units: string,
       offset: 0,
       alignTicks: true,
       scale: true,
-      min: settings.min,
-      max: settings.max,
+      min: initialMin,
+      max: initialMax,
       minInterval,
       splitNumber,
       interval,
@@ -1276,7 +1037,6 @@ export const createTimeSeriesXAxis = (id: string,
       mainType: 'xAxis',
       show: settings.show,
       type: 'time',
-      scale: true,
       position: settings.position,
       id,
       name: utils.customTranslation(settings.label, settings.label),
@@ -1351,10 +1111,10 @@ export const createTimeSeriesVisualMapOption = (settings: TimeSeriesChartVisualM
   dimension: 1,
   pieces: settings.pieces,
   outOfRange: {
-  color: settings.outOfRangeColor
+  color: plainColorFromVariable(settings.outOfRangeColor)
 },
   inRange: !settings.pieces.length ? {
-    color: settings.outOfRangeColor
+    color: plainColorFromVariable(settings.outOfRangeColor)
   } : undefined
 });
 
@@ -1393,7 +1153,7 @@ export const calculateThresholdsOffset = (chart: ECharts,
   return result;
 };
 
-export const parseThresholdData = (value: any): TimeSeriesChartThresholdValue => {
+export const parseThresholdData = (value: any, valueConvertor?: TbUnitConverter): TimeSeriesChartThresholdValue => {
   let thresholdValue: TimeSeriesChartThresholdValue;
   if (Array.isArray(value)) {
     thresholdValue = value;
@@ -1405,7 +1165,7 @@ export const parseThresholdData = (value: any): TimeSeriesChartThresholdValue =>
       thresholdValue = [value];
     }
   }
-  return thresholdValue;
+  return valueConvertor ? thresholdValue.map(item => isNumeric(item) ? valueConvertor(Number(item)) : item) : thresholdValue;
 };
 
 const generateChartThresholds = (thresholdItems: TimeSeriesChartThresholdItem[]): Array<LineSeriesOption> => {
@@ -1488,6 +1248,14 @@ const createThresholdData = (val: string | number, item: TimeSeriesChartThreshol
     }
   ];
 
+export const dataKeySeriesType = (settings: any): TimeSeriesChartSeriesType => {
+  if (settings.seriesType) {
+    return settings.seriesType;
+  } else {
+    return settings.type;
+  }
+}
+
 const generateChartSeries = (dataItems: TimeSeriesChartDataItem[],
                              stack: boolean,
                              noAggregation: boolean,
@@ -1496,7 +1264,7 @@ const generateChartSeries = (dataItems: TimeSeriesChartDataItem[],
   const series: Array<LineSeriesOption | CustomSeriesOption> = [];
   const enabledDataItems = dataItems.filter(d => d.enabled);
   const barDataItems = enabledDataItems.filter(d =>
-    d.dataKey.settings.type === TimeSeriesChartSeriesType.bar && d.data.length);
+    dataKeySeriesType(d.dataKey.settings) === TimeSeriesChartSeriesType.bar && d.data.length);
   let barsCount = barDataItems.length;
   const barGroups: number[] = [];
   if (stack) {
@@ -1508,7 +1276,7 @@ const generateChartSeries = (dataItems: TimeSeriesChartDataItem[],
     barsCount = barGroups.length;
   }
   for (const item of enabledDataItems) {
-    if (item.dataKey.settings.type === TimeSeriesChartSeriesType.bar) {
+    if (dataKeySeriesType(item.dataKey.settings) === TimeSeriesChartSeriesType.bar) {
       if (!item.barRenderContext) {
         item.barRenderContext = {noAggregation,
           shared: barRenderSharedContext};
@@ -1557,7 +1325,7 @@ export const updateDarkMode = (options: EChartsOption,
     }
   }
   for (const item of dataItems) {
-    if (item.dataKey.settings.type === TimeSeriesChartSeriesType.line) {
+    if (dataKeySeriesType(item.dataKey.settings) === TimeSeriesChartSeriesType.line) {
       const lineSettings = item.dataKey.settings as LineSeriesSettings;
       if (item.option.label?.show) {
         item.option.label.rich.value.color = prepareChartThemeColor(lineSettings.pointLabelColor, darkMode, 'series.label');
@@ -1613,7 +1381,7 @@ const createTimeSeriesChartSeries = (item: TimeSeriesChartDataItem,
       }
     };
     item.option = seriesOption;
-    if (settings.type === TimeSeriesChartSeriesType.line) {
+    if (dataKeySeriesType(settings) === TimeSeriesChartSeriesType.line) {
       const lineSettings = settings.lineSettings;
       const lineSeriesOption = seriesOption as LineSeriesOption;
       lineSeriesOption.type = 'line';
@@ -1671,6 +1439,13 @@ const createTimeSeriesChartSeries = (item: TimeSeriesChartDataItem,
     }
   }
   seriesOption.data = item.data;
+  if (seriesOption.type === 'line') {
+    const settings: TimeSeriesChartKeySettings = item.dataKey.settings;
+    const lineSettings = settings.lineSettings;
+    if (!lineSettings.showPoints) {
+      seriesOption.showSymbol = item.data.length === 1;
+    }
+  }
   return seriesOption;
 };
 
@@ -1722,3 +1497,101 @@ const createSeriesLabelOption = (item: TimeSeriesChartDataItem, show: boolean,
   }
   return labelOption;
 };
+
+export const checkLatestDataKeys = (yAxes: TimeSeriesChartYAxes, datasource: Datasource): TimeSeriesChartYAxes => {
+  const latestKeys = datasource?.latestDataKeys || [];
+  const result: TimeSeriesChartYAxes = {};
+
+  for (const [id, axis] of Object.entries(yAxes)) {
+    axis.min = normalizeAxisLimit(axis.min);
+    axis.max = normalizeAxisLimit(axis.max);
+    const minCfg = axis.min;
+    const maxCfg = axis.max;
+
+    const minValid = !!minCfg && (
+      minCfg.type !== ValueSourceType.latestKey ||
+      latestKeys.some(k => isYAxisKey(k, minCfg))
+    );
+
+    const maxValid = !!maxCfg && (
+      maxCfg.type !== ValueSourceType.latestKey ||
+      latestKeys.some(k => isYAxisKey(k, maxCfg))
+    );
+
+    if (minValid && maxValid) {
+      result[id] = axis;
+    }
+  }
+
+  return result;
+}
+
+export const updateLatestDataKeys = (yAxes: TimeSeriesChartYAxisSettings[], datasource: Datasource, dataKeyCallbacks: DataKeysCallbacks)=> {
+  if (datasource) {
+    let latestKeys = datasource.latestDataKeys;
+    if (!latestKeys) {
+      latestKeys = [];
+      datasource.latestDataKeys = latestKeys;
+    }
+    const existingYAxisKeys = latestKeys.filter(k => k.settings?.__yAxisMinKey === true || k.settings?.__yAxisMaxKey === true);
+    const foundYAxisKeys: DataKey[] = [];
+
+    for(const yAxis of yAxes) {
+      const min = yAxis.min as ValueSourceConfig;
+      const max = yAxis.max as ValueSourceConfig;
+      if (min && min.type === ValueSourceType.latestKey) {
+        const found = existingYAxisKeys.find(k => isYAxisKey(k, min));
+        if (!found) {
+          const newKey = dataKeyCallbacks.generateDataKey(min.latestKey, min.latestKeyType,
+            null, true, null);
+          newKey.settings.__yAxisMinKey = true;
+          latestKeys.push(newKey);
+        } else if (foundYAxisKeys.indexOf(found) === -1) {
+          foundYAxisKeys.push(found);
+        }
+      }
+      if (max && max.type === ValueSourceType.latestKey) {
+        const found = existingYAxisKeys.find(k => isYAxisKey(k, max));
+        if (!found) {
+          const newKey = dataKeyCallbacks.generateDataKey(max.latestKey, max.latestKeyType,
+            null, true, null);
+          newKey.settings.__yAxisMaxKey = true;
+          latestKeys.push(newKey);
+        } else if (foundYAxisKeys.indexOf(found) === -1) {
+          foundYAxisKeys.push(found);
+        }
+      }
+    }
+    const toRemove = existingYAxisKeys.filter(k => foundYAxisKeys.indexOf(k) === -1);
+    for (const key of toRemove) {
+      const index = latestKeys.indexOf(key);
+      if (index > -1) {
+        latestKeys.splice(index, 1);
+      }
+    }
+  }
+}
+
+export const isYAxisKey = (d: DataKey, limit: ValueSourceConfig): boolean => {
+  return (d.type === DataKeyType.function && d.label === limit.latestKey) ||
+    (d.type !== DataKeyType.function && d.name === limit.latestKey &&
+      d.type === limit.latestKeyType);
+}
+
+export const normalizeAxisLimit = (limit: string | number | ValueSourceConfig): ValueSourceConfig => {
+  if (!limit) {
+    return {
+      type: ValueSourceType.constant,
+      value: null,
+      entityAlias: null
+    };
+  } else if (typeof limit === 'number' || typeof limit === 'string') {
+    return {
+      type: ValueSourceType.constant,
+      value: Number(limit),
+      entityAlias: null
+    };
+  }
+  return limit;
+}
+

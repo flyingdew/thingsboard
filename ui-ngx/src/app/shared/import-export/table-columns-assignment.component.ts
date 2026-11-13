@@ -1,23 +1,11 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Component, ElementRef, forwardRef, Input, OnInit } from '@angular/core';
 import { ControlValueAccessor, UntypedFormControl, NG_VALIDATORS, NG_VALUE_ACCESSOR, Validator } from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
+import { getCurrentAuthState } from '@core/auth/auth.selectors';
 import { EntityType } from '@shared/models/entity-type.models';
 import {
   CsvColumnParam,
@@ -28,21 +16,22 @@ import { BehaviorSubject, Observable } from 'rxjs';
 import { CollectionViewer, DataSource } from '@angular/cdk/collections';
 
 @Component({
-  selector: 'tb-table-columns-assignment',
-  templateUrl: './table-columns-assignment.component.html',
-  styleUrls: ['./table-columns-assignment.component.scss'],
-  providers: [
-    {
-      provide: NG_VALUE_ACCESSOR,
-      useExisting: forwardRef(() => TableColumnsAssignmentComponent),
-      multi: true
-    },
-    {
-      provide: NG_VALIDATORS,
-      useExisting: forwardRef(() => TableColumnsAssignmentComponent),
-      multi: true,
-    }
-  ]
+    selector: 'tb-table-columns-assignment',
+    templateUrl: './table-columns-assignment.component.html',
+    styleUrls: ['./table-columns-assignment.component.scss'],
+    providers: [
+        {
+            provide: NG_VALUE_ACCESSOR,
+            useExisting: forwardRef(() => TableColumnsAssignmentComponent),
+            multi: true
+        },
+        {
+            provide: NG_VALIDATORS,
+            useExisting: forwardRef(() => TableColumnsAssignmentComponent),
+            multi: true,
+        }
+    ],
+    standalone: false
 })
 export class TableColumnsAssignmentComponent implements OnInit, ControlValueAccessor, Validator {
 
@@ -58,6 +47,8 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
 
   columnDeviceCredentials: AssignmentColumnType[] = [];
 
+  columnDeviceGateway: AssignmentColumnType[] = [];
+
   columnTypesTranslations = importEntityColumnTypeTranslations;
 
   readonly entityTypeDevice = EntityType.DEVICE;
@@ -68,9 +59,11 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
 
   private propagateChangePending = false;
   private propagateChange = null;
+  private readonly legacyEdgeFieldsRequired: boolean;
 
   constructor(public elementRef: ElementRef,
               protected store: Store<AppState>) {
+    this.legacyEdgeFieldsRequired = getCurrentAuthState(this.store).licenseVersion < 2;
   }
 
   ngOnInit(): void {
@@ -85,8 +78,11 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
         this.columnTypes.push(
           { value: ImportEntityColumnType.sharedAttribute },
           { value: ImportEntityColumnType.serverAttribute },
-          { value: ImportEntityColumnType.timeseries },
-          { value: ImportEntityColumnType.isGateway }
+          { value: ImportEntityColumnType.timeseries }
+        );
+        this.columnDeviceGateway.push(
+          { value: ImportEntityColumnType.isGateway },
+          { value: ImportEntityColumnType.overwriteActivityTime }
         );
         this.columnDeviceCredentials.push(
           { value: ImportEntityColumnType.accessToken },
@@ -118,6 +114,12 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
         );
         break;
       case EntityType.EDGE:
+        if (this.legacyEdgeFieldsRequired) {
+          this.columnTypes.push(
+            { value: ImportEntityColumnType.cloudEndpoint },
+            { value: ImportEntityColumnType.edgeLicenseKey }
+          );
+        }
         this.columnTypes.push(
           { value: ImportEntityColumnType.routingKey },
           { value: ImportEntityColumnType.secret },
@@ -158,12 +160,9 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
     this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.description).disabled = isSelectDescription;
 
     if (this.entityType === EntityType.DEVICE) {
-      const isSelectGateway = this.columns.findIndex((column) => column.type === ImportEntityColumnType.isGateway) > -1;
-
-      const isGatewayColumnType = this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.isGateway);
-      if (isGatewayColumnType) {
-        isGatewayColumnType.disabled = isSelectGateway;
-      }
+      this.columnDeviceGateway.forEach((columnType) => {
+        columnType.disabled = this.columns.findIndex(column => column.type === columnType.value) > -1;
+      });
 
       this.columnDeviceCredentials.forEach((columnCredential) => {
         columnCredential.disabled = this.columns.findIndex(column => column.type === columnCredential.value) > -1;
@@ -171,11 +170,18 @@ export class TableColumnsAssignmentComponent implements OnInit, ControlValueAcce
     }
 
     if (this.entityType === EntityType.EDGE) {
+      const isSelectEdgeLicenseKey = this.columns.findIndex((column) => column.type === ImportEntityColumnType.edgeLicenseKey) > -1;
+      const isSelectCloudEndpoint = this.columns.findIndex((column) => column.type === ImportEntityColumnType.cloudEndpoint) > -1;
       const isSelectRoutingKey = this.columns.findIndex((column) => column.type === ImportEntityColumnType.routingKey) > -1;
       const isSelectSecret = this.columns.findIndex((column) => column.type === ImportEntityColumnType.secret) > -1;
 
-      this.valid = this.valid && isSelectSecret && isSelectRoutingKey;
+      this.valid = this.valid && isSelectSecret && isSelectRoutingKey &&
+        (!this.legacyEdgeFieldsRequired || (isSelectEdgeLicenseKey && isSelectCloudEndpoint));
 
+      if (this.legacyEdgeFieldsRequired) {
+        this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.edgeLicenseKey).disabled = isSelectEdgeLicenseKey;
+        this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.cloudEndpoint).disabled = isSelectCloudEndpoint;
+      }
       this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.routingKey).disabled = isSelectRoutingKey;
       this.columnTypes.find((columnType) => columnType.value === ImportEntityColumnType.secret).disabled = isSelectSecret;
     }

@@ -1,23 +1,9 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { BaseData } from '@shared/models/base-data';
 import { TenantId } from '@shared/models/id/tenant-id';
 import { QueueId } from '@shared/models/id/queue-id';
-import { HasTenantId } from '@shared/models/entity.models';
 
 export enum ServiceType {
   TB_CORE = 'TB_CORE',
@@ -100,7 +86,7 @@ export const QueueProcessingStrategyTypesMap = new Map<QueueProcessingStrategyTy
     }]
   ]);
 
-export interface QueueInfo extends BaseData<QueueId>, HasTenantId {
+export interface QueueInfo extends BaseData<QueueId> {
   generatedId?: string;
   name: string;
   packProcessingTimeout: number;
@@ -108,20 +94,27 @@ export interface QueueInfo extends BaseData<QueueId>, HasTenantId {
   consumerPerPartition: boolean;
   pollInterval: number;
   processingStrategy: {
-    type: QueueProcessingStrategyTypes,
-    retries: number,
-    failurePercentage: number,
-    pauseBetweenRetries: number,
-    maxPauseBetweenRetries: number
+    type: QueueProcessingStrategyTypes;
+    retries: number;
+    failurePercentage: number;
+    pauseBetweenRetries: number;
+    maxPauseBetweenRetries: number;
   };
   submitStrategy: {
-    type: QueueSubmitStrategyTypes,
-    batchSize: number,
+    type: QueueSubmitStrategyTypes;
+    batchSize: number;
   };
   tenantId?: TenantId;
   topic: string;
   additionalInfo: {
     description?: string;
     customProperties?: string;
+    duplicateMsgToAllPartitions?: boolean;
   };
+}
+
+export interface QueueStatisticsInfo extends Omit<BaseData<QueueId>, 'label'> {
+  queueName: string;
+  serviceId: string;
+  tenantId?: TenantId;
 }

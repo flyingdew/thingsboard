@@ -1,26 +1,22 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
-import { Dashboard, DashboardLayoutId, GridSettings, WidgetLayouts } from '@app/shared/models/dashboard.models';
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+import {
+  BreakpointId,
+  Dashboard,
+  DashboardLayoutId,
+  DashboardLayoutInfo,
+  GridSettings,
+  WidgetLayouts
+} from '@app/shared/models/dashboard.models';
 import { Widget, WidgetPosition } from '@app/shared/models/widget.models';
 import { Timewindow } from '@shared/models/time/time.models';
 import { IAliasController, IStateController } from '@core/api/widget-api.models';
 import { ILayoutController } from './layout/layout.models';
 import { DashboardContextMenuItem, WidgetContextMenuItem } from '@home/models/dashboard-component.models';
-import { Observable } from 'rxjs';
+import { BehaviorSubject, Observable } from 'rxjs';
+import { EntityGroupInfo } from '@shared/models/entity-group.models';
+import { ElementRef } from '@angular/core';
 
 export declare type DashboardPageScope = 'tenant' | 'customer';
 
@@ -29,11 +25,14 @@ export interface DashboardPageInitData {
   currentDashboardId?: string;
   widgetEditMode?: boolean;
   singlePageMode?: boolean;
+  entityGroup?: EntityGroupInfo;
+  customerId?: string;
 }
 
 export interface DashboardContext {
   instanceId: string;
   state: string;
+  breakpoint: BreakpointId;
   getDashboard: () => Dashboard;
   dashboardTimewindow: Timewindow;
   aliasController: IAliasController;
@@ -41,20 +40,28 @@ export interface DashboardContext {
   stateChanged: Observable<string>;
   stateId: Observable<string>;
   runChangeDetection: () => void;
+  dashboardCssClass?: string;
 }
 
 export interface IDashboardController {
   dashboardCtx: DashboardContext;
+  dashboardContainer: ElementRef;
+  dashboardContent: ElementRef;
+  elRef: ElementRef;
+  aiConfigurableForDashboard: boolean;
   openRightLayout();
   openDashboardState(stateId: string, openRightLayout: boolean);
   addWidget($event: Event, layoutCtx: DashboardPageLayoutContext);
+  configureWithAi($event: Event);
   editWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
-  exportWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
+  replaceReferenceWithWidgetCopy($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
+  exportWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget, widgetTitle: string);
   removeWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   widgetMouseDown($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
+  dashboardMouseDown($event: Event, layoutCtx: DashboardPageLayoutContext);
   widgetClicked($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   prepareDashboardContextMenu(layoutCtx: DashboardPageLayoutContext): Array<DashboardContextMenuItem>;
-  prepareWidgetContextMenu(layoutCtx: DashboardPageLayoutContext, widget: Widget): Array<WidgetContextMenuItem>;
+  prepareWidgetContextMenu(layoutCtx: DashboardPageLayoutContext, widget: Widget, isReference: boolean): Array<WidgetContextMenuItem>;
   copyWidget($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   copyWidgetReference($event: Event, layoutCtx: DashboardPageLayoutContext, widget: Widget);
   pasteWidget($event: Event, layoutCtx: DashboardPageLayoutContext, pos: WidgetPosition);
@@ -63,12 +70,16 @@ export interface IDashboardController {
 
 export interface DashboardPageLayoutContext {
   id: DashboardLayoutId;
+  layoutData: DashboardLayoutInfo;
+  layoutDataChanged: BehaviorSubject<void>;
+  breakpoint: BreakpointId;
   widgets: LayoutWidgetsArray;
   widgetLayouts: WidgetLayouts;
   gridSettings: GridSettings;
   ctrl: ILayoutController;
   dashboardCtrl: IDashboardController;
   ignoreLoading: boolean;
+  displayGrid: 'always' | 'onDrag&Resize' | 'none';
 }
 
 export interface DashboardPageLayout {
@@ -81,6 +92,8 @@ export declare type DashboardPageLayouts = {[key in DashboardLayoutId]: Dashboar
 export class LayoutWidgetsArray implements Iterable<Widget> {
 
   private widgetIds: string[] = [];
+
+  private widget: Widget;
 
   private loaded = false;
 
@@ -101,6 +114,13 @@ export class LayoutWidgetsArray implements Iterable<Widget> {
 
   setWidgetIds(widgetIds: string[]) {
     this.widgetIds = widgetIds;
+    this.widget = null;
+    this.loaded = true;
+  }
+
+  setWidget(widget: Widget) {
+    this.widget = widget;
+    this.widgetIds = [this.widget.id];
     this.loaded = true;
   }
 
@@ -119,13 +139,19 @@ export class LayoutWidgetsArray implements Iterable<Widget> {
 
   [Symbol.iterator](): Iterator<Widget> {
     let pointer = 0;
+    const oneWidget = this.widget;
     const widgetIds = this.widgetIds;
     const dashboard = this.dashboardCtx.getDashboard();
     return {
       next(value?: any): IteratorResult<Widget> {
         if (pointer < widgetIds.length) {
           const widgetId = widgetIds[pointer++];
-          const widget = dashboard.configuration.widgets[widgetId];
+          let widget: Widget;
+          if (oneWidget && oneWidget.id === widgetId) {
+            widget = oneWidget;
+          } else {
+            widget = dashboard.configuration.widgets[widgetId];
+          }
           return {
             done: false,
             value: widget
@@ -150,7 +176,11 @@ export class LayoutWidgetsArray implements Iterable<Widget> {
   }
 
   private widgetById(widgetId: string): Widget {
-    return this.dashboardCtx.getDashboard().configuration.widgets[widgetId];
+    if (this.widget && this.widget.id === widgetId) {
+      return this.widget;
+    } else {
+      return this.dashboardCtx.getDashboard().configuration.widgets[widgetId];
+    }
   }
 
 }

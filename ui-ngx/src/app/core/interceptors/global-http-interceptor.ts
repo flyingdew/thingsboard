@@ -1,25 +1,11 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { HttpErrorResponse, HttpEvent, HttpHandler, HttpInterceptor, HttpRequest } from '@angular/common/http';
 import { Observable } from 'rxjs/internal/Observable';
-import { Inject, Injectable } from '@angular/core';
+import { DOCUMENT, Inject, Injectable } from '@angular/core';
 import { AuthService } from '@core/auth/auth.service';
 import { Constants } from '@shared/models/constants';
-import { InterceptorHttpParams } from './interceptor-http-params';
 import { catchError, delay, finalize, mergeMap, switchMap } from 'rxjs/operators';
 import { of, throwError } from 'rxjs';
 import { InterceptorConfig } from './interceptor-config';
@@ -30,6 +16,10 @@ import { ActionNotificationShow } from '@app/core/notification/notification.acti
 import { DialogService } from '@core/services/dialog.service';
 import { TranslateService } from '@ngx-translate/core';
 import { parseHttpErrorMessage } from '@core/utils';
+import { getInterceptorConfig } from './interceptor.util';
+import { DomSanitizer } from '@angular/platform-browser';
+import { SystemSetupService } from '@core/http/system-setup.service';
+import { isSetupIncompleteError } from '@shared/models/system-setup.models';
 
 const tmpHeaders = {};
 
@@ -39,22 +29,21 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
   private AUTH_SCHEME = 'Bearer ';
   private AUTH_HEADER_NAME = 'X-Authorization';
 
-  private internalUrlPrefixes = [
-    '/api/auth/token',
-    '/api/rpc'
-  ];
-
   private activeRequests = 0;
 
-  constructor(@Inject(Store) private store: Store<AppState>,
-              @Inject(DialogService) private dialogService: DialogService,
-              @Inject(TranslateService) private translate: TranslateService,
-              @Inject(AuthService) private authService: AuthService) {
-  }
+  constructor(
+    private store: Store<AppState>,
+    private dialogService: DialogService,
+    private translate: TranslateService,
+    private authService: AuthService,
+    private sanitizer: DomSanitizer,
+    private systemSetupService: SystemSetupService,
+    @Inject(DOCUMENT) private document: Document
+  ) {}
 
   intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
     if (req.url.startsWith('/api/')) {
-      const config = this.getInterceptorConfig(req);
+      const config = getInterceptorConfig(req);
       this.updateLoadingState(config, true);
       let observable$: Observable<HttpEvent<any>>;
       if (this.isTokenBasedAuthEntryPoint(req.url)) {
@@ -66,7 +55,7 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
           observable$ = this.jwtIntercept(req, next);
         }
       } else {
-        observable$ = this.handleRequest(req, next);
+        observable$ = this.handleRequest(this.addAcceptLanguageHeader(req), next);
       }
       return observable$.pipe(
         finalize(() => {
@@ -98,7 +87,7 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
   }
 
   private handleResponseError(req: HttpRequest<any>, next: HttpHandler, errorResponse: HttpErrorResponse): Observable<HttpEvent<any>> {
-    const config = this.getInterceptorConfig(req);
+    const config = getInterceptorConfig(req);
     let unhandled = false;
     const ignoreErrors = config.ignoreErrors;
     const resendRequest = config.resendRequest;
@@ -111,16 +100,30 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
       } else if (errorCode !== Constants.serverErrorCode.credentialsExpired) {
         unhandled = true;
       }
+    } else if (errorCode === Constants.serverErrorCode.subscriptionViolation) {
+      if (!ignoreErrors) {
+        this.dialogService.subscriptionViolation(errorResponse.error);
+      }
+    } else if (errorCode === Constants.serverErrorCode.entitiesLimitExceeded) {
+      if (!ignoreErrors) {
+        this.dialogService.entitiesLimitExceeded({...errorResponse.error, subscriptionViolation: false});
+      }
     } else if (errorResponse.status === 429) {
       if (resendRequest) {
         return this.retryRequest(req, next);
+      } else {
+        unhandled = true;
       }
     } else if (errorResponse.status === 403) {
       if (!ignoreErrors) {
-        this.dialogService.forbidden();
+        this.dialogService.permissionDenied();
       }
+    } else if (errorResponse.status === 423) {
+      this.handleLock(errorResponse.error);
     } else if (errorResponse.status === 0 || errorResponse.status === -1) {
+      if (!ignoreErrors) {
         this.showError('Unable to connect');
+      }
     } else if (!(req.url.startsWith('/api/rpc') || req.url.startsWith('/api/plugins/rpc'))) {
       if (errorResponse.status === 404) {
         if (!ignoreErrors) {
@@ -133,7 +136,7 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
     }
 
     if (unhandled && !ignoreErrors) {
-      const errorMessageWithTimeout = parseHttpErrorMessage(errorResponse, this.translate, req.responseType);
+      const errorMessageWithTimeout = parseHttpErrorMessage(errorResponse, this.translate, req.responseType, this.sanitizer);
       this.showError(errorMessageWithTimeout.message, errorMessageWithTimeout.timeout);
     }
     return throwError(() => errorResponse);
@@ -162,6 +165,12 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
     const jwtToken = AuthService.getJwtToken();
     if (jwtToken) {
       tmpHeaders[this.AUTH_HEADER_NAME] = `${this.AUTH_SCHEME}${jwtToken}`;
+      const lang = this.document.documentElement.lang;
+      if (lang) {
+        tmpHeaders['Accept-Language'] = lang;
+      } else {
+        delete tmpHeaders['Accept-Language'];
+      }
       req = req.clone({
         setHeaders: tmpHeaders
       });
@@ -171,13 +180,14 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
     }
   }
 
-  private isInternalUrlPrefix(url: string): boolean {
-    for (const index in this.internalUrlPrefixes) {
-      if (url.startsWith(this.internalUrlPrefixes[index])) {
-        return true;
-      }
+  private addAcceptLanguageHeader(req: HttpRequest<any>): HttpRequest<any> {
+    const lang = this.document.documentElement.lang;
+    if (lang) {
+      return req.clone({
+        setHeaders: {'Accept-Language': lang}
+      });
     }
-    return false;
+    return req;
   }
 
   private isTokenBasedAuthEntryPoint(url: string): boolean {
@@ -202,17 +212,10 @@ export class GlobalHttpInterceptor implements HttpInterceptor {
     }
   }
 
-  private getInterceptorConfig(req: HttpRequest<any>): InterceptorConfig {
-    let config: InterceptorConfig;
-    if (req.params && req.params instanceof InterceptorHttpParams) {
-      config = (req.params as InterceptorHttpParams).interceptorConfig;
-    } else {
-      config = new InterceptorConfig(false, false);
+  private handleLock(error: any ) {
+    if (isSetupIncompleteError(error)) {
+      this.systemSetupService.handleSetupState(error.setupState);
     }
-    if (this.isInternalUrlPrefix(req.url)) {
-      config.ignoreLoading = true;
-    }
-    return config;
   }
 
   private showError(error: string, timeout: number = 0) {

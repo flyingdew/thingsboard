@@ -1,26 +1,14 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { PageComponent } from '@shared/components/page.component';
 import { Component, Input, NgZone, OnInit } from '@angular/core';
+import { HttpParams } from '@angular/common/http';
 import { WidgetContext } from '@home/models/widget-component.models';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { MenuService } from '@core/services/menu.service';
-import { HomeSection, HomeSectionPlace } from '@core/services/menu.models';
+import { HomeSection, MenuSection } from '@core/services/menu.models';
 import { Router } from '@angular/router';
 import { map } from 'rxjs/operators';
 
@@ -30,17 +18,16 @@ interface NavigationCardsWidgetSettings {
 }
 
 @Component({
-  selector: 'tb-navigation-cards-widget',
-  templateUrl: './navigation-cards-widget.component.html',
-  styleUrls: ['./navigation-cards-widget.component.scss']
+    selector: 'tb-navigation-cards-widget',
+    templateUrl: './navigation-cards-widget.component.html',
+    styleUrls: ['./navigation-cards-widget.component.scss'],
+    standalone: false
 })
 export class NavigationCardsWidgetComponent extends PageComponent implements OnInit {
 
   homeSections$ = this.menuService.homeSections();
   showHomeSections$ = this.homeSections$.pipe(
-    map((sections) => {
-      return sections.filter((section) => this.sectionPlaces(section).length > 0);
-    })
+    map((sections) => sections.filter((section) => this.sectionPlaces(section).length > 0))
   );
 
   cols = null;
@@ -78,18 +65,28 @@ export class NavigationCardsWidgetComponent extends PageComponent implements OnI
     this.ctx.detectChanges();
   }
 
-  navigate($event: Event, path: string) {
+  sectionUrl(section: MenuSection): string {
+    let url = section.path;
+    if (section.queryParams) {
+      const params = new HttpParams({ fromObject: section.queryParams });
+      url = `${url}?${params.toString()}`;
+    }
+    return url;
+  }
+
+  navigate($event: Event, section: MenuSection) {
     $event.preventDefault();
     this.ngZone.run(() => {
-      this.router.navigateByUrl(path);
+      const url = this.sectionUrl(section);
+      this.router.navigateByUrl(url);
     });
   }
 
-  sectionPlaces(section: HomeSection): HomeSectionPlace[] {
+  sectionPlaces(section: HomeSection): MenuSection[] {
     return section && section.places ? section.places.filter((place) => this.filterPlace(place)) : [];
   }
 
-  private filterPlace(place: HomeSectionPlace): boolean {
+  private filterPlace(place: MenuSection): boolean {
     if (this.settings.filterType === 'include') {
       return this.settings.filter.includes(place.path);
     } else if (this.settings.filterType === 'exclude') {

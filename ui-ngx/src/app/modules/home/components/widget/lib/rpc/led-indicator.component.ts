@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Component, ElementRef, Input, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { PageComponent } from '@shared/components/page.component';
 import { WidgetContext } from '@home/models/widget-component.models';
@@ -25,7 +12,6 @@ import { UtilsService } from '@core/services/utils.service';
 import { IWidgetSubscription, SubscriptionInfo, WidgetSubscriptionOptions } from '@core/api/widget-api.models';
 import { DatasourceType, widgetType } from '@shared/models/widget.models';
 import { EntityType } from '@shared/models/entity-type.models';
-import { ResizeObserver } from '@juggle/resize-observer';
 import Timeout = NodeJS.Timeout;
 
 const checkStatusPollingInterval = 10000;
@@ -47,9 +33,10 @@ interface LedIndicatorSettings {
 }
 
 @Component({
-  selector: 'tb-led-indicator',
-  templateUrl: './led-indicator.component.html',
-  styleUrls: ['./led-indicator.component.scss']
+    selector: 'tb-led-indicator',
+    templateUrl: './led-indicator.component.html',
+    styleUrls: ['./led-indicator.component.scss'],
+    standalone: false
 })
 export class LedIndicatorComponent extends PageComponent implements OnInit, OnDestroy {
 
@@ -226,7 +213,7 @@ export class LedIndicatorComponent extends PageComponent implements OnInit, OnDe
 
   private setFontSize(element: JQuery<HTMLElement>, text: string, fontSize: number, maxWidth: number) {
     let textWidth = this.measureTextWidth(text, fontSize);
-    while (textWidth > maxWidth) {
+    while (textWidth > maxWidth && fontSize > 1) {
       fontSize--;
       textWidth = this.measureTextWidth(text, fontSize);
     }
@@ -240,7 +227,7 @@ export class LedIndicatorComponent extends PageComponent implements OnInit, OnDe
   }
 
   private onError(error: string) {
-    this.error = error;
+    this.error = error ? error.replace(/<\/?br\s*\/?>/gi, '. ') : error;
     this.setFontSize(this.ledError, this.error, this.ledErrorContainer.height(), this.ledErrorContainer.width());
     this.ctx.detectChanges();
   }
@@ -333,11 +320,16 @@ export class LedIndicatorComponent extends PageComponent implements OnInit, OnDe
       if (keyData && keyData.data && keyData.data[0]) {
         const attrValue = keyData.data[0][1];
         if (isDefined(attrValue)) {
-          let parsed = null;
+          let valueToParse = attrValue;
           try {
-            parsed = this.parseValueFunction(JSON.parse(attrValue));
-          } catch (e){/**/}
-          value = !!parsed;
+            valueToParse = JSON.parse(attrValue);
+          } catch (e) {/**/}
+
+          try {
+            value = !!this.parseValueFunction(valueToParse);
+          } catch (e) {
+            value = false;
+          }
         }
       }
     }

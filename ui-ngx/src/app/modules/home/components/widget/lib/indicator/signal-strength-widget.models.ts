@@ -1,19 +1,5 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import {
   BackgroundSettings,
   BackgroundType,
@@ -66,6 +52,7 @@ export interface SignalStrengthWidgetSettings {
   tooltipBackgroundColor: string;
   tooltipBackgroundBlur: number;
   background: BackgroundSettings;
+  padding: string;
 }
 
 export const signalStrengthDefaultSettings: SignalStrengthWidgetSettings = {
@@ -84,12 +71,14 @@ export const signalStrengthDefaultSettings: SignalStrengthWidgetSettings = {
   activeBarsColor: {
     color: 'rgba(92, 223, 144, 1)',
     type: ColorType.range,
-    rangeList: [
-      {to: -85, color: 'rgba(227, 71, 71, 1)'},
-      {from: -85, to: -70, color: 'rgba(255, 122, 0, 1)'},
-      {from: -70, to: -55, color: 'rgba(246, 206, 67, 1)'},
-      {from: -55, color: 'rgba(92, 223, 144, 1)'}
-    ],
+    rangeList: {
+      range: [
+        {to: -85, color: 'rgba(227, 71, 71, 1)'},
+        {from: -85, to: -70, color: 'rgba(255, 122, 0, 1)'},
+        {from: -70, to: -55, color: 'rgba(246, 206, 67, 1)'},
+        {from: -55, color: 'rgba(92, 223, 144, 1)'}
+      ]
+    },
     colorFunction: defaultColorFunction
   },
   noSignalRssiValue: -100,
@@ -126,13 +115,14 @@ export const signalStrengthDefaultSettings: SignalStrengthWidgetSettings = {
       color: 'rgba(255,255,255,0.72)',
       blur: 3
     }
-  }
+  },
+  padding: '12px'
 };
 
-export const signalBarActive = (rssi: number, index: number): boolean => {
+export const signalBarActive = (rssi: number, index: number, minSignal: number): boolean => {
     switch (index) {
       case 0:
-        return rssi > -100;
+        return rssi > minSignal;
       case 1:
         return rssi >= -85;
       case 2:

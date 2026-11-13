@@ -1,68 +1,89 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
-  AfterViewInit,
   Component,
   ElementRef,
+  EventEmitter,
   forwardRef,
   Input,
   OnChanges,
   OnInit,
+  Output,
   SimpleChanges,
   ViewChild
 } from '@angular/core';
-import { ControlValueAccessor, UntypedFormBuilder, UntypedFormGroup, NG_VALUE_ACCESSOR, Validators } from '@angular/forms';
-import { Observable } from 'rxjs';
+import {
+  ControlValueAccessor,
+  NG_VALIDATORS,
+  NG_VALUE_ACCESSOR,
+  UntypedFormBuilder,
+  UntypedFormGroup,
+  ValidationErrors,
+  Validators
+} from '@angular/forms';
+import { Observable, of } from 'rxjs';
 import { filter, map, mergeMap, share, tap } from 'rxjs/operators';
-import { Store } from '@ngrx/store';
-import { AppState } from '@app/core/core.state';
 import { TranslateService } from '@ngx-translate/core';
 import { EntityType } from '@shared/models/entity-type.models';
-import { BaseData } from '@shared/models/base-data';
+import { BaseData, getEntityDisplayName } from '@shared/models/base-data';
 import { EntityId } from '@shared/models/id/entity-id';
 import { EntityService } from '@core/http/entity.service';
 import { MatAutocomplete } from '@angular/material/autocomplete';
 import { MatChipGrid } from '@angular/material/chips';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
-import { SubscriptSizing } from '@angular/material/form-field';
+import { MatFormFieldAppearance, SubscriptSizing } from '@angular/material/form-field';
+import { coerceBoolean } from '@shared/decorators/coercion';
+import { EntityInfoData } from '@shared/models/entity.models';
+import { isArray } from 'lodash';
 
 @Component({
-  selector: 'tb-entity-list',
-  templateUrl: './entity-list.component.html',
-  styleUrls: [],
-  providers: [
-    {
-      provide: NG_VALUE_ACCESSOR,
-      useExisting: forwardRef(() => EntityListComponent),
-      multi: true
-    }
-  ]
+    selector: 'tb-entity-list',
+    templateUrl: './entity-list.component.html',
+    styleUrls: [],
+    providers: [
+        {
+            provide: NG_VALUE_ACCESSOR,
+            useExisting: forwardRef(() => EntityListComponent),
+            multi: true
+        },
+        {
+            provide: NG_VALIDATORS,
+            useExisting: forwardRef(() => EntityListComponent),
+            multi: true
+        }
+    ],
+    standalone: false
 })
-export class EntityListComponent implements ControlValueAccessor, OnInit, AfterViewInit, OnChanges {
+export class EntityListComponent implements ControlValueAccessor, OnInit, OnChanges {
 
   entityListFormGroup: UntypedFormGroup;
 
-  modelValue: Array<string> | null;
+  private modelValue: Array<string> | null;
+
+  @Input()
+  fetchEntitiesFunction: (searchText?: string) => Observable<Array<BaseData<EntityId>>>;
+
+  @Input()
+  appearance: MatFormFieldAppearance = 'fill';
 
   @Input()
   entityType: EntityType;
 
   @Input()
-  subType: string;
+  entitySubType = '';
+
+  @Input()
+  entityListText = 'entity.entity-list';
+
+  @Input()
+  noEntitiesText = 'entity.no-entities-matching';
+
+  @Input()
+  entitiesRequiredText = 'entity.entity-list-empty';
+
+  // @Input()
+  // subType: string;
 
   @Input()
   labelText: string;
@@ -87,6 +108,7 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
   }
 
   @Input()
+  @coerceBoolean()
   disabled: boolean;
 
   @Input()
@@ -94,6 +116,25 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
 
   @Input()
   hint: string;
+
+  @Input()
+  @coerceBoolean()
+  syncIdsWithDB = false;
+
+  @Input()
+  @coerceBoolean()
+  inlineField: boolean;
+
+  @Input()
+  @coerceBoolean()
+  allowCreateNew: boolean;
+
+  @Input()
+  @coerceBoolean()
+  useEntityDisplayName = false;
+
+  @Output()
+  createNew = new EventEmitter<string>();
 
   @ViewChild('entityInput') entityInput: ElementRef<HTMLInputElement>;
   @ViewChild('entityAutocomplete') matAutocomplete: MatAutocomplete;
@@ -106,28 +147,32 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
 
   private dirty = false;
 
-  private propagateChange = (v: any) => { };
+  private propagateChange = (_v: any) => { };
 
-  constructor(private store: Store<AppState>,
-              public translate: TranslateService,
+  constructor(private translate: TranslateService,
               private entityService: EntityService,
               private fb: UntypedFormBuilder) {
     this.entityListFormGroup = this.fb.group({
-      entities: [this.entities, this.required ? [Validators.required] : []],
+      entities: [this.entities],
       entity: [null]
     });
   }
 
-  updateValidators() {
+  private updateValidators() {
     this.entityListFormGroup.get('entities').setValidators(this.required ? [Validators.required] : []);
     this.entityListFormGroup.get('entities').updateValueAndValidity();
+  }
+
+  createNewEntity($event: Event, searchText?: string) {
+    $event.stopPropagation();
+    this.createNew.emit(searchText);
   }
 
   registerOnChange(fn: any): void {
     this.propagateChange = fn;
   }
 
-  registerOnTouched(fn: any): void {
+  registerOnTouched(_fn: any): void {
   }
 
   ngOnInit() {
@@ -142,7 +187,7 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
         }
       }),
       filter((value) => typeof value === 'string'),
-      map((value) => value ? (typeof value === 'string' ? value : value.name) : ''),
+      map((value) => value ? value : ''),
       mergeMap(name => this.fetchEntities(name) ),
       share()
     );
@@ -159,9 +204,6 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
     }
   }
 
-  ngAfterViewInit(): void {
-  }
-
   setDisabledState(isDisabled: boolean): void {
     this.disabled = isDisabled;
     if (isDisabled) {
@@ -171,25 +213,49 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
     }
   }
 
-  writeValue(value: Array<string> | null): void {
+  writeValue(value: Array<string> | Array<EntityInfoData> | null): void {
     this.searchText = '';
-    if (value != null && value.length > 0) {
-      this.modelValue = [...value];
-      this.entityService.getEntities(this.entityType, value).subscribe(
+    if (value?.length > 0) {
+      let entitiesObservable: Observable<Array<BaseData<EntityId>>>;
+      if (typeof value[0] === 'string') {
+        const entityIds = value as Array<string>;
+        this.modelValue = [...entityIds];
+        entitiesObservable = this.entityService.getEntities(this.entityType, entityIds);
+      } else {
+        const entities = value as Array<EntityInfoData>;
+        this.modelValue = entities.map(entity => entity.id.id);
+        entitiesObservable = of(entities);
+      }
+      entitiesObservable.subscribe(
         (entities) => {
           this.entities = entities;
           this.entityListFormGroup.get('entities').setValue(this.entities);
-        }
-      );
+          if (this.syncIdsWithDB && this.modelValue.length !== this.entities.length) {
+            this.modelValue = this.entities.map(entity => entity.id.id);
+            if (!this.modelValue.length) {
+              this.modelValue = null;
+            }
+            this.propagateChange(this.modelValue);
+          }
+        });
     } else {
       this.entities = [];
       this.entityListFormGroup.get('entities').setValue(this.entities);
       this.modelValue = null;
     }
     this.dirty = true;
+    if (this.entityInput) {
+      this.entityInput.nativeElement.value = '';
+    }
   }
 
-  reset() {
+  validate(): ValidationErrors | null {
+    return (isArray(this.modelValue) && this.modelValue.length) || !this.required ? null : {
+      entities: {valid: false}
+    };
+  }
+
+  private reset() {
     this.entities = [];
     this.entityListFormGroup.get('entities').setValue(this.entities);
     this.modelValue = null;
@@ -201,7 +267,7 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
     this.dirty = true;
   }
 
-  add(entity: BaseData<EntityId>): void {
+  private add(entity: BaseData<EntityId>): void {
     if (!this.modelValue || this.modelValue.indexOf(entity.id.id) === -1) {
       if (!this.modelValue) {
         this.modelValue = [];
@@ -214,7 +280,7 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
     this.clear();
   }
 
-  remove(entity: BaseData<EntityId>) {
+  public remove(entity: BaseData<EntityId>) {
     let index = this.entities.indexOf(entity);
     if (index >= 0) {
       this.entities.splice(index, 1);
@@ -229,26 +295,30 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
     }
   }
 
-  displayEntityFn(entity?: BaseData<EntityId>): string | undefined {
-    return entity ? entity.name : undefined;
+  public displayEntityFn(entity?: BaseData<EntityId>): string | undefined {
+    return entity ? (this.useEntityDisplayName ? getEntityDisplayName(entity) : entity.name) : undefined;
   }
 
-  fetchEntities(searchText?: string): Observable<Array<BaseData<EntityId>>> {
+  private fetchEntities(searchText?: string): Observable<Array<BaseData<EntityId>>> {
     this.searchText = searchText;
-
-    return this.entityService.getEntitiesByNameFilter(this.entityType, searchText,
-      50, this.subType ? this.subType : '', {ignoreLoading: true}).pipe(
-      map((data) => data ? data : []));
+    if (this.fetchEntitiesFunction) {
+      return this.fetchEntitiesFunction(searchText).pipe(
+        map((data) => data ? data : []));
+    } else {
+      return this.entityService.getEntitiesByNameFilter(this.entityType, searchText,
+        50, this.entitySubType, {ignoreLoading: true}).pipe(
+        map((data) => data ? data : []));
+    }
   }
 
-  onFocus() {
+  public onFocus() {
     if (this.dirty) {
       this.entityListFormGroup.get('entity').updateValueAndValidity({onlySelf: true, emitEvent: true});
       this.dirty = false;
     }
   }
 
-  clear(value: string = '') {
+  private clear(value: string = '') {
     this.entityInput.nativeElement.value = value;
     this.entityListFormGroup.get('entity').patchValue(value, {emitEvent: true});
     setTimeout(() => {
@@ -257,4 +327,16 @@ export class EntityListComponent implements ControlValueAccessor, OnInit, AfterV
     }, 0);
   }
 
+  get placeholder(): string {
+    return this.placeholderText ? this.placeholderText : (this.entityListText ? this.translate.instant(this.entityListText): undefined);
+  }
+
+  get requiredLabel(): string {
+    return this.requiredText ? this.requiredText :
+      (this.entitiesRequiredText ? this.translate.instant(this.entitiesRequiredText): undefined);
+  }
+
+  public textIsNotEmpty(text: string): boolean {
+    return (text && text.length > 0);
+  }
 }

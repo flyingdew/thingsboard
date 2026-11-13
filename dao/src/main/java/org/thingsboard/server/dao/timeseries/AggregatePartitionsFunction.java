@@ -1,23 +1,11 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 package org.thingsboard.server.dao.timeseries;
 
 import com.datastax.oss.driver.api.core.cql.Row;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import jakarta.annotation.Nullable;
 import lombok.extern.slf4j.Slf4j;
 import org.thingsboard.server.common.data.kv.AggTsKvEntry;
 import org.thingsboard.server.common.data.kv.Aggregation;
@@ -32,7 +20,6 @@ import org.thingsboard.server.common.data.kv.TsKvEntry;
 import org.thingsboard.server.common.data.kv.TsKvEntryAggWrapper;
 import org.thingsboard.server.dao.nosql.TbResultSet;
 
-import jakarta.annotation.Nullable;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executor;
@@ -277,7 +264,7 @@ public class AggregatePartitionsFunction implements com.google.common.util.concu
     private Optional<TsKvEntry> processMinOrMaxResult(AggregationResult aggResult) {
         if (aggResult.dataType == DataType.DOUBLE || aggResult.dataType == DataType.LONG) {
             if (aggResult.hasDouble) {
-                double currentD = aggregation == Aggregation.MIN ? Optional.ofNullable(aggResult.dValue).orElse(Double.MAX_VALUE) : Optional.ofNullable(aggResult.dValue).orElse(Double.MIN_VALUE);
+                double currentD = aggregation == Aggregation.MIN ? Optional.ofNullable(aggResult.dValue).orElse(Double.MAX_VALUE) : Optional.ofNullable(aggResult.dValue).orElse(-Double.MAX_VALUE);
                 double currentL = aggregation == Aggregation.MIN ? Optional.ofNullable(aggResult.lValue).orElse(Long.MAX_VALUE) : Optional.ofNullable(aggResult.lValue).orElse(Long.MIN_VALUE);
                 return Optional.of(new BasicTsKvEntry(ts, new DoubleDataEntry(key, aggregation == Aggregation.MIN ? Math.min(currentD, currentL) : Math.max(currentD, currentL))));
             } else {

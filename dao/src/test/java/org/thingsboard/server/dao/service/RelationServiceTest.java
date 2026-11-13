@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.service;
 
 import com.datastax.oss.driver.api.core.uuid.Uuids;
@@ -28,13 +16,16 @@ import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.id.AssetId;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.relation.EntityRelation;
+import org.thingsboard.server.common.data.relation.EntityRelationPathQuery;
 import org.thingsboard.server.common.data.relation.EntityRelationsQuery;
 import org.thingsboard.server.common.data.relation.EntitySearchDirection;
 import org.thingsboard.server.common.data.relation.RelationEntityTypeFilter;
+import org.thingsboard.server.common.data.relation.RelationPathLevel;
 import org.thingsboard.server.common.data.relation.RelationTypeGroup;
 import org.thingsboard.server.common.data.relation.RelationsSearchParameters;
-import org.thingsboard.server.dao.exception.DataValidationException;
 import org.thingsboard.server.dao.relation.RelationService;
+import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
+import org.thingsboard.server.exception.DataValidationException;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,11 +33,16 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 @DaoSqlTest
 public class RelationServiceTest extends AbstractServiceTest {
 
     @Autowired
     RelationService relationService;
+
+    @Autowired
+    private TbTenantProfileCache tbTenantProfileCache;
 
     @Before
     public void before() {
@@ -63,7 +59,7 @@ public class RelationServiceTest extends AbstractServiceTest {
 
         EntityRelation relation = new EntityRelation(parentId, childId, EntityRelation.CONTAINS_TYPE);
 
-        Assert.assertTrue(saveRelation(relation));
+        Assert.assertNotNull(saveRelation(relation));
 
         Assert.assertTrue(relationService.checkRelation(SYSTEM_TENANT_ID, parentId, childId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON));
 
@@ -72,6 +68,14 @@ public class RelationServiceTest extends AbstractServiceTest {
         Assert.assertFalse(relationService.checkRelation(SYSTEM_TENANT_ID, childId, parentId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON));
 
         Assert.assertFalse(relationService.checkRelation(SYSTEM_TENANT_ID, childId, parentId, "NOT_EXISTING_TYPE", RelationTypeGroup.COMMON));
+
+        Assert.assertTrue(relationService.checkRelationAsync(SYSTEM_TENANT_ID, parentId, childId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
+
+        Assert.assertFalse(relationService.checkRelationAsync(SYSTEM_TENANT_ID, parentId, childId, "NOT_EXISTING_TYPE", RelationTypeGroup.COMMON).get());
+
+        Assert.assertFalse(relationService.checkRelationAsync(SYSTEM_TENANT_ID, childId, parentId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
+
+        Assert.assertFalse(relationService.checkRelationAsync(SYSTEM_TENANT_ID, childId, parentId, "NOT_EXISTING_TYPE", RelationTypeGroup.COMMON).get());
     }
 
     @Test
@@ -91,6 +95,10 @@ public class RelationServiceTest extends AbstractServiceTest {
         Assert.assertFalse(relationService.checkRelation(SYSTEM_TENANT_ID, parentId, childId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON));
 
         Assert.assertTrue(relationService.checkRelation(SYSTEM_TENANT_ID, childId, subChildId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON));
+
+        Assert.assertFalse(relationService.checkRelationAsync(SYSTEM_TENANT_ID, parentId, childId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
+
+        Assert.assertTrue(relationService.checkRelationAsync(SYSTEM_TENANT_ID, childId, subChildId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
 
         Assert.assertTrue(relationService.deleteRelationAsync(SYSTEM_TENANT_ID, childId, subChildId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
     }
@@ -129,6 +137,10 @@ public class RelationServiceTest extends AbstractServiceTest {
         Assert.assertFalse(relationService.checkRelation(SYSTEM_TENANT_ID, parentId, childId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON));
 
         Assert.assertFalse(relationService.checkRelation(SYSTEM_TENANT_ID, childId, subChildId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON));
+
+        Assert.assertFalse(relationService.checkRelationAsync(SYSTEM_TENANT_ID, parentId, childId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
+
+        Assert.assertFalse(relationService.checkRelationAsync(SYSTEM_TENANT_ID, childId, subChildId, EntityRelation.CONTAINS_TYPE, RelationTypeGroup.COMMON).get());
     }
 
     @Test
@@ -204,8 +216,8 @@ public class RelationServiceTest extends AbstractServiceTest {
         Assert.assertEquals(0, relations.size());
     }
 
-    private Boolean saveRelation(EntityRelation relationA1) {
-        return relationService.saveRelation(SYSTEM_TENANT_ID, relationA1);
+    private EntityRelation saveRelation(EntityRelation relation) {
+        return relationService.saveRelation(SYSTEM_TENANT_ID, relation);
     }
 
     @Test
@@ -265,9 +277,9 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationB = new EntityRelation(assetB, assetC, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationC = new EntityRelation(assetC, assetA, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(relationA);
-        saveRelation(relationB);
-        saveRelation(relationC);
+        relationA = saveRelation(relationA);
+        relationB = saveRelation(relationB);
+        relationC = saveRelation(relationC);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(assetA, EntitySearchDirection.FROM, -1, false));
@@ -299,8 +311,8 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationBD = new EntityRelation(assetB, deviceD, EntityRelation.CONTAINS_TYPE);
 
 
-        saveRelation(relationAB);
-        saveRelation(relationBC);
+        relationAB = saveRelation(relationAB);
+        relationBC = saveRelation(relationBC);
         saveRelation(relationBD);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
@@ -329,39 +341,33 @@ public class RelationServiceTest extends AbstractServiceTest {
 
         EntityRelation relationAB = new EntityRelation(root, left, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationBC = new EntityRelation(root, right, EntityRelation.CONTAINS_TYPE);
-        saveRelation(relationAB);
-        expected.add(relationAB);
-
-        saveRelation(relationBC);
-        expected.add(relationBC);
+        expected.add(saveRelation(relationAB));
+        expected.add(saveRelation(relationBC));
 
         for (int i = 0; i < maxLevel; i++) {
             var newLeft = new AssetId(Uuids.timeBased());
             var newRight = new AssetId(Uuids.timeBased());
             EntityRelation relationLeft = new EntityRelation(left, newLeft, EntityRelation.CONTAINS_TYPE);
             EntityRelation relationRight = new EntityRelation(right, newRight, EntityRelation.CONTAINS_TYPE);
-            saveRelation(relationLeft);
-            expected.add(relationLeft);
-            saveRelation(relationRight);
-            expected.add(relationRight);
+            expected.add(saveRelation(relationLeft));
+            expected.add(saveRelation(relationRight));
             left = newLeft;
             right = newRight;
         }
-
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(root, EntitySearchDirection.FROM, -1, false));
         query.setFilters(Collections.singletonList(new RelationEntityTypeFilter(EntityRelation.CONTAINS_TYPE, Collections.singletonList(EntityType.ASSET))));
         List<EntityRelation> relations = relationService.findByQuery(SYSTEM_TENANT_ID, query).get();
         Assert.assertEquals(expected.size(), relations.size());
-        for(EntityRelation r : expected){
+        for (EntityRelation r : expected) {
             Assert.assertTrue(relations.contains(r));
         }
 
         //Test from cache
         relations = relationService.findByQuery(SYSTEM_TENANT_ID, query).get();
         Assert.assertEquals(expected.size(), relations.size());
-        for(EntityRelation r : expected){
+        for (EntityRelation r : expected) {
             Assert.assertTrue(relations.contains(r));
         }
     }
@@ -372,7 +378,7 @@ public class RelationServiceTest extends AbstractServiceTest {
         relation.setTo(new AssetId(Uuids.timeBased()));
         relation.setType(EntityRelation.CONTAINS_TYPE);
         Assertions.assertThrows(DataValidationException.class, () -> {
-            Assert.assertTrue(saveRelation(relation));
+            Assert.assertNotNull(saveRelation(relation));
         });
     }
 
@@ -382,7 +388,7 @@ public class RelationServiceTest extends AbstractServiceTest {
         relation.setFrom(new AssetId(Uuids.timeBased()));
         relation.setType(EntityRelation.CONTAINS_TYPE);
         Assertions.assertThrows(DataValidationException.class, () -> {
-            Assert.assertTrue(saveRelation(relation));
+            Assert.assertNotNull(saveRelation(relation));
         });
     }
 
@@ -392,7 +398,7 @@ public class RelationServiceTest extends AbstractServiceTest {
         relation.setFrom(new AssetId(Uuids.timeBased()));
         relation.setTo(new AssetId(Uuids.timeBased()));
         Assertions.assertThrows(DataValidationException.class, () -> {
-            Assert.assertTrue(saveRelation(relation));
+            Assert.assertNotNull(saveRelation(relation));
         });
     }
 
@@ -414,10 +420,10 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationC = new EntityRelation(assetC, assetD, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationD = new EntityRelation(assetC, assetE, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(relationA);
-        saveRelation(relationB);
-        saveRelation(relationC);
-        saveRelation(relationD);
+        relationA = saveRelation(relationA);
+        relationB = saveRelation(relationB);
+        relationC = saveRelation(relationC);
+        relationD = saveRelation(relationD);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(assetA, EntitySearchDirection.FROM, -1, true));
@@ -450,9 +456,9 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationB = new EntityRelation(assetB, assetC, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationC = new EntityRelation(assetC, assetD, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(relationA);
-        saveRelation(relationB);
-        saveRelation(relationC);
+        relationA = saveRelation(relationA);
+        relationB = saveRelation(relationB);
+        relationC = saveRelation(relationC);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(assetA, EntitySearchDirection.FROM, -1, true));
@@ -494,12 +500,12 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationE = new EntityRelation(assetD, assetF, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationF = new EntityRelation(assetD, assetG, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(relationA);
-        saveRelation(relationB);
-        saveRelation(relationC);
-        saveRelation(relationD);
-        saveRelation(relationE);
-        saveRelation(relationF);
+        relationA = saveRelation(relationA);
+        relationB = saveRelation(relationB);
+        relationC = saveRelation(relationC);
+        relationD = saveRelation(relationD);
+        relationE = saveRelation(relationE);
+        relationF = saveRelation(relationF);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(assetA, EntitySearchDirection.FROM, 2, true));
@@ -547,12 +553,12 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationE = new EntityRelation(assetD, assetF, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationF = new EntityRelation(assetD, assetG, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(relationA);
-        saveRelation(relationB);
-        saveRelation(relationC);
-        saveRelation(relationD);
-        saveRelation(relationE);
-        saveRelation(relationF);
+        relationA = saveRelation(relationA);
+        relationB = saveRelation(relationB);
+        relationC = saveRelation(relationC);
+        relationD = saveRelation(relationD);
+        relationE = saveRelation(relationE);
+        relationF = saveRelation(relationF);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(assetA, EntitySearchDirection.FROM, 2, false));
@@ -600,12 +606,12 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation relationE = new EntityRelation(assetD, assetF, EntityRelation.CONTAINS_TYPE);
         EntityRelation relationF = new EntityRelation(assetD, assetG, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(relationA);
-        saveRelation(relationB);
-        saveRelation(relationC);
-        saveRelation(relationD);
-        saveRelation(relationE);
-        saveRelation(relationF);
+        relationA = saveRelation(relationA);
+        relationB = saveRelation(relationB);
+        relationC = saveRelation(relationC);
+        relationD = saveRelation(relationD);
+        relationE = saveRelation(relationE);
+        relationF = saveRelation(relationF);
 
         EntityRelationsQuery query = new EntityRelationsQuery();
         query.setParameters(new RelationsSearchParameters(assetA, EntitySearchDirection.FROM, -1, false));
@@ -627,6 +633,114 @@ public class RelationServiceTest extends AbstractServiceTest {
         Assert.assertTrue(relations.contains(relationD));
         Assert.assertTrue(relations.contains(relationE));
         Assert.assertTrue(relations.contains(relationF));
+    }
+
+    @Test
+    public void testFindByPathQueryWithoutExceedingLimit() throws Exception {
+        /*
+        A
+        └──[firstLevel, TO]→ B
+            └──[secondLevel, TO]→ C
+                ├──[thirdLevel, FROM]→ D1
+                ├──[thirdLevel, FROM]→ D2
+                ├──[thirdLevel, FROM]→ ...
+                └──[thirdLevel, FROM]→ D{N - 1}, where N is the limit
+        */
+        AssetId assetA = new AssetId(Uuids.timeBased());
+        AssetId assetB = new AssetId(Uuids.timeBased());
+        AssetId assetC = new AssetId(Uuids.timeBased());
+
+        // create first and second level
+        saveRelation(new EntityRelation(assetB, assetA, "firstLevel"));
+        saveRelation(new EntityRelation(assetC, assetB, "secondLevel"));
+
+        int limit = tbTenantProfileCache.get(tenantId)
+                .getDefaultProfileConfiguration()
+                .getMaxRelatedEntitiesToReturnPerCfArgument();
+
+        int totalCreated = limit - 1;
+
+        List<EntityRelation> allThirdLevelRelations = new ArrayList<>();
+        for (int i = 0; i < totalCreated; i++) {
+            AssetId leaf = new AssetId(Uuids.timeBased());
+            allThirdLevelRelations.add(saveRelation(new EntityRelation(assetC, leaf, "thirdLevel")));
+        }
+
+        EntityRelationPathQuery query = new EntityRelationPathQuery(assetA, List.of(
+                new RelationPathLevel(EntitySearchDirection.TO, "firstLevel"),
+                new RelationPathLevel(EntitySearchDirection.TO, "secondLevel"),
+                new RelationPathLevel(EntitySearchDirection.FROM, "thirdLevel")
+        ));
+
+        // call a method that applies the default limit internally
+        List<EntityRelation> result = relationService.findByRelationPathQueryAsync(tenantId, query).get();
+
+        // verify that limit has been applied
+        assertThat(result).hasSize(totalCreated);
+
+        // verify all returned are valid third-level relations under C
+        assertThat(result)
+                .allSatisfy(rel -> {
+                    assertThat(rel.getType()).isEqualTo("thirdLevel");
+                    assertThat(rel.getFrom()).isEqualTo(assetC);
+                });
+
+        // verify all created relations are returned; the query applies LIMIT without ORDER BY, so row order is undefined
+        assertThat(result).containsExactlyInAnyOrderElementsOf(allThirdLevelRelations);
+    }
+
+    @Test
+    public void testFindByPathQueryWithExceedingLimit() throws Exception {
+        /*
+        A
+        └──[firstLevel, TO]→ B
+            └──[secondLevel, TO]→ C
+                ├──[thirdLevel, FROM]→ D1
+                ├──[thirdLevel, FROM]→ D2
+                ├──[thirdLevel, FROM]→ ...
+                └──[thirdLevel, FROM]→ D{N + 20}, where N is the limit
+        */
+        AssetId assetA = new AssetId(Uuids.timeBased());
+        AssetId assetB = new AssetId(Uuids.timeBased());
+        AssetId assetC = new AssetId(Uuids.timeBased());
+
+        // create first and second level
+        saveRelation(new EntityRelation(assetB, assetA, "firstLevel"));
+        saveRelation(new EntityRelation(assetC, assetB, "secondLevel"));
+
+        int limit = tbTenantProfileCache.get(tenantId)
+                .getDefaultProfileConfiguration()
+                .getMaxRelatedEntitiesToReturnPerCfArgument();
+
+        int totalCreated = limit + 20;
+
+        List<EntityRelation> allThirdLevelRelations = new ArrayList<>();
+        for (int i = 0; i < totalCreated; i++) {
+            AssetId leaf = new AssetId(Uuids.timeBased());
+            allThirdLevelRelations.add(saveRelation(new EntityRelation(assetC, leaf, "thirdLevel")));
+        }
+
+        EntityRelationPathQuery query = new EntityRelationPathQuery(assetA, List.of(
+                new RelationPathLevel(EntitySearchDirection.TO, "firstLevel"),
+                new RelationPathLevel(EntitySearchDirection.TO, "secondLevel"),
+                new RelationPathLevel(EntitySearchDirection.FROM, "thirdLevel")
+        ));
+
+        // call a method that applies the default limit internally
+        List<EntityRelation> result = relationService.findByRelationPathQueryAsync(tenantId, query).get();
+
+        // verify that limit has been applied
+        assertThat(result).hasSize(limit);
+
+        // verify all returned are valid third-level relations under C
+        assertThat(result)
+                .allSatisfy(rel -> {
+                    assertThat(rel.getType()).isEqualTo("thirdLevel");
+                    assertThat(rel.getFrom()).isEqualTo(assetC);
+                });
+
+        // verify the returned subset is part of all created relations
+        assertThat(result).isSubsetOf(allThirdLevelRelations);
     }
 
     @Test
@@ -670,8 +784,8 @@ public class RelationServiceTest extends AbstractServiceTest {
         EntityRelation firstRelation = new EntityRelation(rootAsset, firstAsset, EntityRelation.CONTAINS_TYPE);
         EntityRelation secondRelation = new EntityRelation(rootAsset, secondAsset, EntityRelation.CONTAINS_TYPE);
 
-        saveRelation(firstRelation);
-        saveRelation(secondRelation);
+        firstRelation = saveRelation(firstRelation);
+        secondRelation = saveRelation(secondRelation);
 
         if (!lastLvlOnly || lvl == 1) {
             entityRelations.add(firstRelation);

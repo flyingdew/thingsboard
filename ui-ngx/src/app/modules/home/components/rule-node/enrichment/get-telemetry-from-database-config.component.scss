@@ -1,0 +1,22 @@
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+:host {
+
+  .see-example {
+    display: inline-block;
+  }
+
+  .item-center {
+    align-items: center;
+
+    .fetch-mod-toggle {
+      width: 100%;
+    }
+  }
+
+  .hint-container {
+    width: 100%;
+  }
+}
+

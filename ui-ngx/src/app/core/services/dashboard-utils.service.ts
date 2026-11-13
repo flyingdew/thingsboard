@@ -1,37 +1,43 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Injectable } from '@angular/core';
 import { UtilsService } from '@core/services/utils.service';
 import { TimeService } from '@core/services/time.service';
 import {
+  BreakpointId,
+  breakpointIdIconMap,
+  breakpointIdTranslationMap,
+  BreakpointInfo,
+  BreakpointLayoutInfo,
+  BreakpointSystemId,
   Dashboard,
   DashboardConfiguration,
   DashboardLayout,
   DashboardLayoutId,
-  DashboardLayoutInfo,
   DashboardLayoutsInfo,
   DashboardState,
   DashboardStateLayouts,
   GridSettings,
+  htmlPageDefaultConfig,
+  htmlPageWidgetId,
+  LayoutType,
   WidgetLayout
 } from '@shared/models/dashboard.models';
-import { deepClone, isDefined, isDefinedAndNotNull, isNotEmptyStr, isString, isUndefined } from '@core/utils';
+import {
+  deepClean,
+  deepClone,
+  isDefined,
+  isDefinedAndNotNull,
+  isNotEmptyStr,
+  isString,
+  isUndefined,
+  mergeDeep
+} from '@core/utils';
+import { htmlContainerDefaultSettings, HtmlContainerWidgetSettings } from '@shared/models/html-container.models';
 import {
   Datasource,
+  datasourcesHasAggregation,
   datasourcesHasOnlyComparisonAggregation,
   DatasourceType,
   defaultLegendConfig,
@@ -39,8 +45,10 @@ import {
   TargetDevice,
   TargetDeviceType,
   Widget,
+  widgetActionSources,
   WidgetConfig,
   WidgetConfigMode,
+  WidgetSize,
   widgetType,
   WidgetTypeDescriptor
 } from '@app/shared/models/widget.models';
@@ -48,21 +56,41 @@ import { EntityType } from '@shared/models/entity-type.models';
 import { AliasFilterType, EntityAlias, EntityAliasFilter } from '@app/shared/models/alias.models';
 import { EntityId } from '@app/shared/models/id/entity-id';
 import { initModelFromDefaultTimewindow } from '@shared/models/time/time.models';
+import { EntityGroupService } from '@core/http/entity-group.service';
+import { Observable, of } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { AlarmSearchStatus } from '@shared/models/alarm.models';
 import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
+import { BackgroundType, colorBackground, isBackgroundSettings } from '@shared/models/widget-settings.models';
+import { MediaBreakpoints } from '@shared/models/constants';
+import { TranslateService } from '@ngx-translate/core';
+import { DashboardPageLayout } from '@home/components/dashboard-page/dashboard-page.models';
+import { maxGridsterCol, maxGridsterRow } from '@home/models/dashboard-component.models';
+import {
+  findWidgetModelDefinition,
+  widgetHasTimewindow,
+  WidgetModelDefinition
+} from '@shared/models/widget/widget-model.definition';
 
 @Injectable({
   providedIn: 'root'
 })
 export class DashboardUtilsService {
 
+  private systemBreakpoints: {[key in BreakpointSystemId]?: BreakpointInfo};
+
   constructor(private utils: UtilsService,
-              private timeService: TimeService) {
+              private timeService: TimeService,
+              private translate: TranslateService,
+              private entityGroupService: EntityGroupService) {
   }
 
   public validateAndUpdateDashboard(dashboard: Dashboard): Dashboard {
     if (!dashboard.configuration) {
-      dashboard.configuration = {};
+      dashboard.configuration = {
+        entityAliases: {},
+        filters: {},
+      };
     }
     if (isUndefined(dashboard.configuration.widgets)) {
       dashboard.configuration.widgets = {};
@@ -150,9 +178,8 @@ export class DashboardUtilsService {
       dashboard.configuration.filters = {};
     }
 
-    if (isUndefined(dashboard.configuration.timewindow)) {
-      dashboard.configuration.timewindow = this.timeService.defaultTimewindow();
-    }
+    dashboard.configuration.timewindow = initModelFromDefaultTimewindow(dashboard.configuration.timewindow,
+      false, false, this.timeService, true, true);
     if (isUndefined(dashboard.configuration.settings)) {
       dashboard.configuration.settings = {};
       dashboard.configuration.settings.stateControllerId = 'entity';
@@ -212,12 +239,19 @@ export class DashboardUtilsService {
       row: widget.row,
       col: widget.col,
     };
+    dashboard.configuration.timewindow = initModelFromDefaultTimewindow(null, false, false, this.timeService, true, false);
     return dashboard;
   }
 
   public validateAndUpdateWidget(widget: Widget): Widget {
-    widget.config = this.validateAndUpdateWidgetConfig(widget.config, widget.type);
+    const widgetDefinition = widget.config ? findWidgetModelDefinition(widget) : null;
+    if (widgetDefinition) {
+      widget.config = this.validateAndUpdateWidgetConfigWithModelDefinition(widget, widgetDefinition);
+    } else {
+      widget.config = this.validateAndUpdateWidgetConfig(widget.config, widget.type);
+    }
     widget = this.validateAndUpdateWidgetTypeFqn(widget);
+    this.removeTimewindowConfigIfUnused(widget);
     if (isDefined((widget as any).title)) {
       delete (widget as any).title;
     }
@@ -278,8 +312,11 @@ export class DashboardUtilsService {
     }
     widgetConfig.datasources = this.validateAndUpdateDatasources(widgetConfig.datasources);
     if (type === widgetType.latest) {
-      const onlyHistoryTimewindow = datasourcesHasOnlyComparisonAggregation(widgetConfig.datasources);
-      widgetConfig.timewindow = initModelFromDefaultTimewindow(widgetConfig.timewindow, true, onlyHistoryTimewindow, this.timeService);
+      if (datasourcesHasAggregation(widgetConfig.datasources)) {
+        const onlyHistoryTimewindow = datasourcesHasOnlyComparisonAggregation(widgetConfig.datasources);
+        widgetConfig.timewindow = initModelFromDefaultTimewindow(widgetConfig.timewindow, true,
+          onlyHistoryTimewindow, this.timeService, false);
+      }
     } else if (type === widgetType.rpc) {
       if (widgetConfig.targetDeviceAliasIds && widgetConfig.targetDeviceAliasIds.length) {
         widgetConfig.targetDevice = {
@@ -329,7 +366,57 @@ export class DashboardUtilsService {
         }
       }
     }
-    return widgetConfig;
+    return deepClean(widgetConfig, {cleanKeys: ['_hash'], cleanOnlyKey: true});
+  }
+
+  public validateAndUpdateWidgetConfigWithModelDefinition(widget: Widget, widgetDefinition: WidgetModelDefinition): WidgetConfig {
+    const widgetConfig = widget.config;
+    if (widget.type === widgetType.latest && widgetDefinition.hasTimewindow(widget)) {
+      widgetConfig.timewindow = initModelFromDefaultTimewindow(widgetConfig.timewindow, true,
+        widgetDefinition.datasourcesHasOnlyComparisonAggregation(widget), this.timeService, false);
+    }
+    return deepClean(widgetConfig, {cleanKeys: ['_hash'], cleanOnlyKey: true});
+  }
+
+  private removeTimewindowConfigIfUnused(widget: Widget) {
+    const hasTimewindow = widgetHasTimewindow(widget);
+    if (!hasTimewindow || widget.config.useDashboardTimewindow) {
+      delete widget.config.displayTimewindow;
+      delete widget.config.timewindow;
+
+      if (!hasTimewindow) {
+        delete widget.config.useDashboardTimewindow;
+      }
+    }
+  }
+
+  public prepareWidgetForSaving(widget: Widget): Widget {
+    this.removeTimewindowConfigIfUnused(widget);
+    widget = deepClean(widget, {cleanKeys: ['_hash'], cleanOnlyKey: true});
+    return widget;
+  }
+
+  public prepareWidgetForScadaLayout(widget: Widget, isScada: boolean): Widget {
+    const config = widget.config;
+    config.showTitle = false;
+    config.dropShadow = false;
+    config.resizable = true;
+    config.preserveAspectRatio = isScada;
+    config.padding = '0';
+    config.margin = '0';
+    config.backgroundColor = 'rgba(0,0,0,0)';
+    const settings = config.settings || {};
+    settings.padding = '0';
+    const background = settings.background;
+    if (isBackgroundSettings(background)) {
+      background.type = BackgroundType.color;
+      background.color = 'rgba(0,0,0,0)';
+      background.overlay.enabled = false;
+    } else {
+      settings.background = colorBackground('rgba(0,0,0,0)');
+    }
+    config.settings = settings;
+    return widget;
   }
 
   public validateAndUpdateDatasources(datasources?: Datasource[]): Datasource[] {
@@ -361,6 +448,14 @@ export class DashboardUtilsService {
     return datasources;
   }
 
+  public getWidgetDatasources(widget: Widget): Datasource[] {
+    const widgetDefinition = findWidgetModelDefinition(widget);
+    if (widgetDefinition) {
+      return widgetDefinition.datasources(widget);
+    }
+    return this.validateAndUpdateDatasources(widget.config.datasources);
+  }
+
   public createDefaultLayoutData(): DashboardLayout {
     return {
       widgets: {},
@@ -368,8 +463,9 @@ export class DashboardUtilsService {
     };
   }
 
-  private createDefaultGridSettings(): GridSettings {
+  public createDefaultGridSettings(): GridSettings {
     return {
+      layoutType: LayoutType.default,
       backgroundColor: '#eeeeee',
       columns: 24,
       margin: 10,
@@ -392,12 +488,25 @@ export class DashboardUtilsService {
     };
   }
 
-  public createSingleEntityFilter(entityId: EntityId): EntityAliasFilter {
-    return {
-      type: AliasFilterType.singleEntity,
-      singleEntity: entityId,
-      resolveMultiple: false
-    };
+  public createSingleEntityFilter(entityId: EntityId): Observable<EntityAliasFilter> {
+    if (entityId.entityType === EntityType.ENTITY_GROUP) {
+      return this.entityGroupService.getEntityGroup(entityId.id).pipe(
+        map((entityGroup) => {
+          return {
+            type: AliasFilterType.entityGroupList,
+            groupType: entityGroup.type,
+            entityGroupList: [entityId.id],
+            resolveMultiple: false
+          };
+        })
+      );
+    } else {
+      return of({
+        type: AliasFilterType.singleEntity,
+        singleEntity: entityId,
+        resolveMultiple: false
+      });
+    }
   }
 
   public widgetConfigFromWidgetType(widgetTypeDescriptor: WidgetTypeDescriptor): WidgetConfig {
@@ -455,12 +564,18 @@ export class DashboardUtilsService {
     if (!layout.gridSettings) {
       layout.gridSettings = this.createDefaultGridSettings();
     }
-    if (layout.gridSettings.margins && layout.gridSettings.margins.length === 2) {
-      layout.gridSettings.margin = layout.gridSettings.margins[0];
-      delete layout.gridSettings.margins;
+    if (!layout.widgets) {
+      layout.widgets = {};
+    }
+    if ((layout.gridSettings as any).margins && (layout.gridSettings as any).margins.length === 2) {
+      layout.gridSettings.margin = (layout.gridSettings as any).margins[0];
+      delete (layout.gridSettings as any).margins;
     }
     layout.gridSettings.outerMargin = isDefined(layout.gridSettings.outerMargin) ? layout.gridSettings.outerMargin : true;
     layout.gridSettings.margin = isDefined(layout.gridSettings.margin) ? layout.gridSettings.margin : 10;
+    if (!layout.gridSettings.layoutType) {
+      layout.gridSettings.layoutType = LayoutType.default;
+    }
   }
 
   public setLayouts(dashboard: Dashboard, targetState: string, newLayouts: DashboardStateLayouts) {
@@ -501,6 +616,28 @@ export class DashboardUtilsService {
     this.removeUnusedWidgets(dashboard);
   }
 
+  public isReferenceWidget(dashboard: Dashboard, widgetId: string): boolean {
+    const states = dashboard.configuration.states;
+    let foundWidgetRefs = 0;
+
+    for (const state of Object.values(states)) {
+      for (const layout of Object.values(state.layouts)) {
+        if (layout.widgets[widgetId]) {
+          foundWidgetRefs++;
+        }
+        if (layout.breakpoints) {
+          for (const breakpoint of Object.values(layout.breakpoints)) {
+            if (breakpoint.widgets[widgetId]) {
+              foundWidgetRefs++;
+            }
+          }
+        }
+      }
+    }
+
+    return foundWidgetRefs > 1;
+  }
+
   public getRootStateId(states: {[id: string]: DashboardState }): string {
     for (const stateId of Object.keys(states)) {
       const state = states[stateId];
@@ -520,22 +657,75 @@ export class DashboardUtilsService {
       for (const l of Object.keys(state.layouts)) {
         const layout: DashboardLayout = state.layouts[l];
         if (layout) {
-          result[l] = {
-            widgetIds: [],
-            widgetLayouts: {},
-            gridSettings: {}
-          } as DashboardLayoutInfo;
-          for (const id of Object.keys(layout.widgets)) {
-            result[l].widgetIds.push(id);
+          result[l]= {
+            default: this.getBreakpointLayoutData(layout, targetState)
+          };
+          if (layout.breakpoints) {
+            for (const breakpoint of Object.keys(layout.breakpoints)) {
+              result[l][breakpoint] = this.getBreakpointLayoutData(layout.breakpoints[breakpoint], targetState);
+            }
           }
-          result[l].widgetLayouts = layout.widgets;
-          result[l].gridSettings = layout.gridSettings;
         }
       }
       return result;
     } else {
       return null;
     }
+  }
+
+  private getBreakpointLayoutData(layout: DashboardLayout, stateId: string): BreakpointLayoutInfo {
+    const result: BreakpointLayoutInfo = {
+      widgetIds: [],
+      widgetLayouts: {},
+      gridSettings: {}
+    };
+    if (layout.gridSettings?.layoutType === LayoutType.html) {
+      result.gridSettings = {
+        layoutType: LayoutType.html,
+        autoFillHeight: true,
+        mobileAutoFillHeight: true,
+        columns: 1,
+        minColumns: 1,
+        margin: 0,
+        outerMargin: false
+      };
+      // Stable per state: an unchanged page keeps its rendered instance, a changed one is re-rendered.
+      const widgetId = htmlPageWidgetId(stateId);
+      const actions = {...layout.gridSettings?.htmlPageConfig?.actions};
+      delete actions[widgetActionSources.headerButton.value];
+      const config = mergeDeep({},
+        htmlPageDefaultConfig,
+        {
+          settings: layout.gridSettings?.htmlPageConfig?.settings || mergeDeep({} as HtmlContainerWidgetSettings, htmlContainerDefaultSettings),
+          actions
+        }
+      );
+      result.widget = {
+        id: widgetId,
+        col: 0,
+        row: 0,
+        sizeX: 1,
+        sizeY: 1,
+        typeFullFqn: 'system.html_container',
+        type: widgetType.static,
+        config
+      };
+      result.widgetLayouts[widgetId] = {
+        col: 0,
+        row: 0,
+        sizeX: 1,
+        sizeY: 1,
+        resizable: false,
+        mobileOrder: 0
+      };
+    } else {
+      for (const id of Object.keys(layout.widgets)) {
+        result.widgetIds.push(id);
+      }
+      result.widgetLayouts = layout.widgets;
+      result.gridSettings = layout.gridSettings;
+    }
+    return result;
   }
 
   public getWidgetsArray(dashboard: Dashboard): Array<Widget> {
@@ -550,11 +740,16 @@ export class DashboardUtilsService {
   }
 
   public isEmptyDashboard(dashboard: Dashboard): boolean {
-    if (dashboard?.configuration?.widgets) {
-      return Object.keys(dashboard?.configuration?.widgets).length === 0;
-    } else {
-      return true;
+    if (dashboard?.configuration?.widgets && Object.keys(dashboard.configuration.widgets).length) {
+      return false;
     }
+    // An HTML page has content but no stored widgets: its widget is virtual.
+    return !Object.values(dashboard?.configuration?.states || {}).some(state => this.isHtmlPageState(state));
+  }
+
+  // A state whose widget grid is replaced by an HTML page: widgets cannot be added to it.
+  public isHtmlPageState(state: DashboardState): boolean {
+    return state?.layouts?.main?.gridSettings?.layoutType === LayoutType.html;
   }
 
   public addWidgetToLayout(dashboard: Dashboard,
@@ -562,13 +757,17 @@ export class DashboardUtilsService {
                            targetLayout: DashboardLayoutId,
                            widget: Widget,
                            originalColumns?: number,
-                           originalSize?: {sizeX: number; sizeY: number},
+                           originalSize?: WidgetSize,
                            row?: number,
-                           column?: number): void {
+                           column?: number,
+                           breakpoint = 'default'): void {
     const dashboardConfiguration = dashboard.configuration;
     const states = dashboardConfiguration.states;
     const state = states[targetState];
-    const layout = state.layouts[targetLayout];
+    let layout = state.layouts[targetLayout];
+    if (breakpoint !== 'default' && layout.breakpoints?.[breakpoint]) {
+      layout = layout.breakpoints[breakpoint];
+    }
     const layoutCount = Object.keys(state.layouts).length;
     if (!widget.id) {
       widget.id = this.utils.guid();
@@ -582,7 +781,9 @@ export class DashboardUtilsService {
       mobileOrder: widget.config.mobileOrder,
       mobileHeight: widget.config.mobileHeight,
       mobileHide: widget.config.mobileHide,
-      desktopHide: widget.config.desktopHide
+      desktopHide: widget.config.desktopHide,
+      preserveAspectRatio: originalSize ? originalSize.preserveAspectRatio : widget.config.preserveAspectRatio,
+      resizable: originalSize ? originalSize.resizable : widget.config.resizable
     };
     if (isUndefined(originalColumns)) {
       originalColumns = 24;
@@ -602,6 +803,10 @@ export class DashboardUtilsService {
     if (row > -1 && column > - 1) {
       widgetLayout.row = row;
       widgetLayout.col = column;
+      if (this.hasWidgetCollision(widgetLayout.row, widgetLayout.col,
+                                  widgetLayout.sizeX, widgetLayout.sizeY, Object.values(layout.widgets))) {
+        this.widgetPossiblePosition(widgetLayout, layout);
+      }
     } else {
       row = 0;
       for (const w of Object.keys(layout.widgets)) {
@@ -623,14 +828,66 @@ export class DashboardUtilsService {
     layout.widgets[widget.id] = widgetLayout;
   }
 
+  private widgetPossiblePosition(widgetLayout: WidgetLayout, layout: DashboardLayout) {
+    let bestRow = 0;
+    let bestCol = 0;
+
+    let maxCol = layout.gridSettings.minColumns || layout.gridSettings.columns || 0;
+    let maxRow = 0;
+
+    const widgetLayouts = Object.values(layout.widgets);
+
+    widgetLayouts.forEach(widget => {
+      maxCol = Math.max(maxCol, widget.col + widget.sizeX);
+      maxRow = Math.max(maxRow, widget.row + widget.sizeY);
+    })
+
+    for (; bestRow < maxRow; bestRow++) {
+      for (bestCol = 0; bestCol < maxCol; bestCol++) {
+        if (!this.hasWidgetCollision(bestRow, bestCol, widgetLayout.sizeX, widgetLayout.sizeY, widgetLayouts)) {
+          widgetLayout.row = bestRow;
+          widgetLayout.col = bestCol;
+          return;
+        }
+      }
+    }
+    const canAddToRows = maxGridsterRow >= maxRow + bestRow;
+    const canAddToColumns = maxGridsterCol >= maxCol + bestCol;
+    const addToRows = bestRow <= bestCol && canAddToRows;
+    if (!addToRows && canAddToColumns) {
+      widgetLayout.col = maxCol;
+      widgetLayout.row = 0;
+    } else if (canAddToRows) {
+      widgetLayout.row = maxRow;
+      widgetLayout.col = 0;
+    }
+  }
+
+  private hasWidgetCollision(row: number, col: number, sizeX: number, sizeY: number, widgetLayouts: WidgetLayout[]) {
+    const left = col;
+    const right = col + sizeX;
+    const top = row;
+    const bottom = row + sizeY;
+
+    for (const widget of widgetLayouts) {
+      const left2 = widget.col;
+      const right2 = widget.col + widget.sizeX;
+      const top2 = widget.row;
+      const bottom2 = widget.row + widget.sizeY;
+
+      if (left < right2 && right > left2 && top < bottom2 && bottom > top2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public removeWidgetFromLayout(dashboard: Dashboard,
                                 targetState: string,
                                 targetLayout: DashboardLayoutId,
-                                widgetId: string) {
-    const dashboardConfiguration = dashboard.configuration;
-    const states = dashboardConfiguration.states;
-    const state = states[targetState];
-    const layout = state.layouts[targetLayout];
+                                widgetId: string,
+                                breakpoint: BreakpointId) {
+    const layout = this.getDashboardLayoutConfig(dashboard.configuration.states[targetState].layouts[targetLayout], breakpoint);
     delete layout.widgets[widgetId];
     this.removeUnusedWidgets(dashboard);
   }
@@ -662,7 +919,6 @@ export class DashboardUtilsService {
     const columns = gridSettings.columns || 24;
     const ratio = columns / prevColumns;
     layout.gridSettings = gridSettings;
-    let maxRow = 0;
     for (const w of Object.keys(layout.widgets)) {
       const widget = layout.widgets[w];
       if (!widget.sizeX) {
@@ -671,23 +927,83 @@ export class DashboardUtilsService {
       if (!widget.sizeY) {
         widget.sizeY = 1;
       }
-      maxRow = Math.max(maxRow, widget.row + widget.sizeY);
     }
-    const newMaxRow = Math.round(maxRow * ratio);
+    const widgets: WidgetLayout[] = [];
     for (const w of Object.keys(layout.widgets)) {
       const widget = layout.widgets[w];
-      if (widget.row + widget.sizeY === maxRow) {
-        widget.row = Math.round(widget.row * ratio);
-        widget.sizeY = newMaxRow - widget.row;
-      } else {
-        widget.row = Math.round(widget.row * ratio);
-        widget.sizeY = Math.round(widget.sizeY * ratio);
-      }
-      widget.sizeX = Math.round(widget.sizeX * ratio);
+      widget.row = Math.round(widget.row * ratio);
       widget.col = Math.round(widget.col * ratio);
-      if (widget.col + widget.sizeX > columns) {
-        widget.sizeX = columns - widget.col;
+      widget.sizeX = Math.max(1, Math.round(widget.sizeX * ratio));
+      widget.sizeY = Math.max(1, Math.round(widget.sizeY * ratio));
+      widgets.push(widget);
+    }
+    widgets.sort((w1, w2) => {
+      let res = w1.col - w2.col;
+      if (res === 0) {
+        res = w1.row - w2.row;
       }
+      return res;
+    });
+    for (const widget of widgets) {
+      for (const widget2 of widgets) {
+        if (widget !== widget2) {
+          const left = widget.col;
+          const right = widget.col + widget.sizeX;
+          const top = widget.row;
+          const bottom = widget.row + widget.sizeY;
+          const left2 = widget2.col;
+          const right2 = widget2.col + widget2.sizeX;
+          const top2 = widget2.row;
+          const bottom2 = widget2.row + widget2.sizeY;
+          if (left < right2 && right > left2 &&
+            top < bottom2 && bottom > top2 ) {
+            let horizontalOverlapFixed = false;
+            if (right - left2 === 1) {
+              if (widget.sizeX > 1) {
+                widget.sizeX--;
+                horizontalOverlapFixed = true;
+              } else if (widget2.sizeX > 1) {
+                widget2.col++;
+                widget2.sizeX--;
+                horizontalOverlapFixed = true;
+              }
+            }
+            if (!horizontalOverlapFixed && (bottom - top2) === 1) {
+              if (widget.sizeY > 1) {
+                widget.sizeY--;
+              } else if (widget2.sizeY > 1) {
+                widget2.row++;
+                widget2.sizeY--;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  public moveWidgets(layout: DashboardLayout, cols: number, rows: number) {
+    cols = isDefinedAndNotNull(cols) ? Math.round(cols) : 0;
+    rows = isDefinedAndNotNull(rows) ? Math.round(rows) : 0;
+    if (cols < 0 || rows < 0) {
+      let widgetMinCol = Infinity;
+      let widgetMinRow = Infinity;
+      for (const w of Object.keys(layout.widgets)) {
+        const widget = layout.widgets[w];
+        widgetMinCol = Math.min(widgetMinCol, widget.col);
+        widgetMinRow = Math.min(widgetMinRow, widget.row);
+      }
+      if ((cols + widgetMinCol) < 0 ){
+        cols = -widgetMinCol;
+      }
+      if ((rows + widgetMinRow) < 0 ){
+        rows = -widgetMinRow;
+      }
+    }
+    for (const w of Object.keys(layout.widgets)) {
+      const widget = layout.widgets[w];
+      widget.col += cols;
+      widget.row += rows;
     }
   }
 
@@ -700,10 +1016,18 @@ export class DashboardUtilsService {
       for (const s of Object.keys(states)) {
         const state = states[s];
         for (const l of Object.keys(state.layouts)) {
-          const layout = state.layouts[l];
+          const layout: DashboardLayout = state.layouts[l];
           if (layout.widgets[widgetId]) {
             found = true;
             break;
+          }
+          if (layout.breakpoints) {
+            for (const breakpoint of Object.keys(layout.breakpoints)) {
+              if (layout.breakpoints[breakpoint].widgets[widgetId]) {
+                found = true;
+                break;
+              }
+            }
           }
         }
       }
@@ -861,4 +1185,157 @@ export class DashboardUtilsService {
     }
   }
 
+  replaceReferenceWithWidgetCopy(widget: Widget,
+                                 dashboard: Dashboard,
+                                 targetState: string,
+                                 targetLayout: DashboardLayoutId,
+                                 breakpointId: BreakpointId,
+                                 isRemoveWidget: boolean): Widget {
+
+    const newWidget = deepClone(widget);
+    newWidget.id = this.utils.guid();
+
+    const originalColumns = this.getOriginalColumns(dashboard, targetState, targetLayout, breakpointId);
+    const originalSize = this.getOriginalSize(dashboard, targetState, targetLayout, widget, breakpointId);
+
+    const layout = this.getDashboardLayoutConfig(dashboard.configuration.states[targetState].layouts[targetLayout], breakpointId);
+    const widgetLayout = layout.widgets[widget.id];
+    const targetRow = widgetLayout.row;
+    const targetColumn = widgetLayout.col;
+
+    if (isRemoveWidget) {
+      this.removeWidgetFromLayout(dashboard, targetState, targetLayout, widget.id, breakpointId);
+    }
+
+    this.addWidgetToLayout(dashboard, targetState, targetLayout, newWidget, originalColumns, originalSize,
+      targetRow, targetColumn, breakpointId);
+
+    return newWidget;
+  }
+
+  getDashboardLayoutConfig(layout: DashboardLayout, breakpointId: BreakpointId): DashboardLayout {
+    if (breakpointId !== 'default' && layout.breakpoints) {
+      return layout.breakpoints[breakpointId];
+    }
+    return layout;
+  }
+
+  getOriginalColumns(dashboard: Dashboard, sourceState: string, sourceLayout: DashboardLayoutId, breakpointId: BreakpointId): number {
+    let originalColumns = 24;
+    let gridSettings = null;
+    const state = dashboard.configuration.states[sourceState];
+    const layoutCount = Object.keys(state.layouts).length;
+    if (state) {
+      const layout = this.getDashboardLayoutConfig(state.layouts[sourceLayout], breakpointId);
+      if (layout) {
+        gridSettings = layout.gridSettings;
+      }
+    }
+    if (gridSettings && gridSettings.columns) {
+      originalColumns = gridSettings.columns;
+    }
+    originalColumns = originalColumns * layoutCount;
+    return originalColumns;
+  }
+
+  getOriginalSize(dashboard: Dashboard, sourceState: string, sourceLayout: DashboardLayoutId,
+                  widget: Widget, breakpointId: BreakpointId): WidgetSize {
+    const layout = this.getDashboardLayoutConfig(dashboard.configuration.states[sourceState].layouts[sourceLayout], breakpointId);
+    const widgetLayout = layout.widgets[widget.id];
+    return {
+      sizeX: widgetLayout.sizeX,
+      sizeY: widgetLayout.sizeY,
+      preserveAspectRatio: widgetLayout.preserveAspectRatio,
+      resizable: widgetLayout.resizable
+    };
+  }
+
+  private loadSystemBreakpoints() {
+    this.systemBreakpoints = {};
+    const dashboardMediaBreakpointIds: BreakpointSystemId[] = ['xs', 'sm', 'md', 'lg', 'xl'];
+    dashboardMediaBreakpointIds.forEach(breakpoint => {
+      const value = MediaBreakpoints[breakpoint];
+      const minWidth = value.match(/min-width:\s*(\d+)px/)?.[1];
+      const maxWidth = value.match(/max-width:\s*(\d+)px/)?.[1];
+      this.systemBreakpoints[breakpoint] = ({
+        id: breakpoint,
+        minWidth: minWidth ? Number(minWidth) : undefined,
+        maxWidth: maxWidth ? Number(maxWidth) : undefined,
+        value
+      });
+    });
+  }
+
+  getListBreakpoint(): BreakpointInfo[] {
+    if(!this.systemBreakpoints) {
+      this.loadSystemBreakpoints();
+    }
+    const breakpointsList = Object.values(this.systemBreakpoints);
+    breakpointsList.unshift({id: 'default'});
+    return breakpointsList;
+  }
+
+  getBreakpoints(): string[] {
+    if(!this.systemBreakpoints) {
+      this.loadSystemBreakpoints();
+    }
+    return Object.values(this.systemBreakpoints).map(item => item.value);
+  }
+
+  getBreakpointInfoByValue(breakpointValue: string): BreakpointInfo {
+    if(!this.systemBreakpoints) {
+      this.loadSystemBreakpoints();
+    }
+    return Object.values(this.systemBreakpoints).find(item => item.value === breakpointValue);
+  }
+
+  getBreakpointInfoById(breakpointId: BreakpointId): BreakpointInfo {
+    if(!this.systemBreakpoints) {
+      this.loadSystemBreakpoints();
+    }
+    return this.systemBreakpoints[breakpointId];
+  }
+
+  getBreakpointName(breakpointId: BreakpointId): string {
+    if (breakpointIdTranslationMap.has(breakpointId)) {
+      return this.translate.instant(breakpointIdTranslationMap.get(breakpointId));
+    }
+    return breakpointId;
+  }
+
+  getBreakpointIcon(breakpointId: BreakpointId): string {
+    if (breakpointIdIconMap.has(breakpointId)) {
+      return breakpointIdIconMap.get(breakpointId);
+    }
+    return 'desktop_windows';
+  }
+
+  getBreakpointSizeDescription(breakpointId: BreakpointId): string {
+    const currentData = this.getBreakpointInfoById(breakpointId);
+    const minStr = isDefined(currentData?.minWidth) ? `min ${currentData.minWidth}px` : '';
+    const maxStr = isDefined(currentData?.maxWidth) ? `max ${currentData.maxWidth}px` : '';
+    return minStr && maxStr ? `${minStr} - ${maxStr}` : `${minStr}${maxStr}`;
+  }
+
+  updatedLayoutForBreakpoint(layout: DashboardPageLayout, breakpointId: BreakpointId) {
+    let selectBreakpointId: BreakpointId = 'default';
+    if (layout.layoutCtx.layoutData[breakpointId]) {
+      selectBreakpointId = breakpointId;
+    }
+    layout.layoutCtx.breakpoint = selectBreakpointId;
+    const layoutInfo = layout.layoutCtx.layoutData[selectBreakpointId];
+    if (layoutInfo.gridSettings) {
+      layout.layoutCtx.gridSettings = layoutInfo.gridSettings;
+    }
+    if (layoutInfo.widget) {
+      layout.layoutCtx.widgets.setWidget(layoutInfo.widget);
+    } else {
+      layout.layoutCtx.widgets.setWidgetIds(layoutInfo.widgetIds);
+    }
+    layout.layoutCtx.widgetLayouts = layoutInfo.widgetLayouts;
+    if (layout.show && layout.layoutCtx.ctrl) {
+      layout.layoutCtx.ctrl.reload();
+    }
+    layout.layoutCtx.ignoreLoading = true;
+  }
 }

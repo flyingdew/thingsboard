@@ -1,26 +1,13 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { ChangeDetectorRef, Component, Injector } from '@angular/core';
 import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { BasicWidgetConfigComponent } from '@home/components/widget/config/widget-config.component.models';
 import { WidgetConfigComponentData } from '@home/models/widget-component.models';
-import { ComparisonResultType, DataKey, Datasource, WidgetConfig, } from '@shared/models/widget.models';
+import { ComparisonResultType, DataKey, Datasource, WidgetConfig, widgetTitleAutocompleteValues, } from '@shared/models/widget.models';
 import { WidgetConfigComponent } from '@home/components/widget/widget-config.component';
 import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
 import {
@@ -52,9 +39,10 @@ import {
 } from '@shared/models/time/time.models';
 
 @Component({
-  selector: 'tb-aggregated-value-card-basic-config',
-  templateUrl: './aggregated-value-card-basic-config.component.html',
-  styleUrls: ['../basic-config.scss']
+    selector: 'tb-aggregated-value-card-basic-config',
+    templateUrl: './aggregated-value-card-basic-config.component.html',
+    styleUrls: ['../basic-config.scss'],
+    standalone: false
 })
 export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigComponent {
 
@@ -80,6 +68,8 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
 
   datePreviewFn = this._datePreviewFn.bind(this);
 
+  predefinedValues = widgetTitleAutocompleteValues;
+  
   constructor(protected store: Store<AppState>,
               protected widgetConfigComponent: WidgetConfigComponent,
               private cd: ChangeDetectorRef,
@@ -101,10 +91,10 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
       history: {
         historyType: HistoryWindowType.INTERVAL,
         quickInterval: QuickTimeInterval.CURRENT_MONTH_SO_FAR,
+        interval: 12 * HOUR,
       },
       aggregation: {
         type: AggregationType.AVG,
-        interval: 12 * HOUR,
         limit: 5000
       }
     };
@@ -148,11 +138,13 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
       color: {
         color: 'rgba(0, 0, 0, 0.87)',
         type: ColorType.range,
-        rangeList: [
-          {to: 0, color: '#198038'},
-          {from: 0, to: 0, color: 'rgba(0, 0, 0, 0.87)'},
-          {from: 0, color: '#D12730'}
-        ],
+        rangeList: {
+          range: [
+            {to: 0, color: '#198038'},
+            {from: 0, to: 0, color: 'rgba(0, 0, 0, 0.87)'},
+            {from: 0, color: '#D12730'}
+          ]
+        },
         colorFunction: ''
       },
       showArrow: true
@@ -255,6 +247,7 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
 
       cardButtons: [this.getCardButtons(configData.config), []],
       borderRadius: [configData.config.borderRadius, []],
+      padding: [settings.padding, []],
 
       actions: [configData.config.actions || {}, []]
     });
@@ -302,6 +295,7 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
 
     this.setCardButtons(config.cardButtons, this.widgetConfig.config);
     this.widgetConfig.config.borderRadius = config.borderRadius;
+    this.widgetConfig.config.settings.padding = config.padding;
 
     this.widgetConfig.config.actions = config.actions;
     return this.widgetConfig;
@@ -391,6 +385,9 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
 
   private getCardButtons(config: WidgetConfig): string[] {
     const buttons: string[] = [];
+    if (isUndefined(config.enableDataExport) || config.enableDataExport) {
+      buttons.push('dataExport');
+    }
     if (isUndefined(config.enableFullscreen) || config.enableFullscreen) {
       buttons.push('fullscreen');
     }
@@ -398,6 +395,7 @@ export class AggregatedValueCardBasicConfigComponent extends BasicWidgetConfigCo
   }
 
   private setCardButtons(buttons: string[], config: WidgetConfig) {
+    config.enableDataExport = buttons.includes('dataExport');
     config.enableFullscreen = buttons.includes('fullscreen');
   }
 

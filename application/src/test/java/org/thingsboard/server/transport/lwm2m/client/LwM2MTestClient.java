@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.transport.lwm2m.client;
 
 import lombok.Data;
@@ -33,7 +21,6 @@ import org.eclipse.leshan.client.object.Security;
 import org.eclipse.leshan.client.object.Server;
 import org.eclipse.leshan.client.observer.LwM2mClientObserver;
 import org.eclipse.leshan.client.resource.DummyInstanceEnabler;
-import org.eclipse.leshan.client.resource.LwM2mInstanceEnabler;
 import org.eclipse.leshan.client.resource.LwM2mObjectEnabler;
 import org.eclipse.leshan.client.resource.ObjectsInitializer;
 import org.eclipse.leshan.client.resource.listener.ObjectsListenerAdapter;
@@ -47,10 +34,19 @@ import org.eclipse.leshan.core.model.ObjectModel;
 import org.eclipse.leshan.core.model.StaticModel;
 import org.eclipse.leshan.core.node.codec.DefaultLwM2mDecoder;
 import org.eclipse.leshan.core.node.codec.DefaultLwM2mEncoder;
+import org.eclipse.leshan.core.node.codec.NodeDecoder;
+import org.eclipse.leshan.core.node.codec.NodeEncoder;
+import org.eclipse.leshan.core.node.codec.cbor.LwM2mNodeCborDecoder;
+import org.eclipse.leshan.core.node.codec.cbor.LwM2mNodeCborEncoder;
+import org.eclipse.leshan.core.node.codec.senml.LwM2mNodeSenMLDecoder;
+import org.eclipse.leshan.core.node.codec.senml.LwM2mNodeSenMLEncoder;
 import org.eclipse.leshan.core.request.BootstrapRequest;
+import org.eclipse.leshan.core.request.ContentFormat;
 import org.eclipse.leshan.core.request.DeregisterRequest;
 import org.eclipse.leshan.core.request.RegisterRequest;
 import org.eclipse.leshan.core.request.UpdateRequest;
+import org.eclipse.leshan.senml.cbor.upokecenter.SenMLCborUpokecenterEncoderDecoder;
+import org.eclipse.leshan.senml.json.jackson.SenMLJsonJacksonEncoderDecoder;
 import org.junit.Assert;
 import org.mockito.Mockito;
 import org.thingsboard.server.transport.lwm2m.server.client.LwM2mClient;
@@ -59,6 +55,9 @@ import org.thingsboard.server.transport.lwm2m.server.uplink.LwM2mUplinkMsgHandle
 import org.thingsboard.server.transport.lwm2m.utils.LwM2mValueConverterImpl;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -68,7 +67,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
+import static org.awaitility.Awaitility.await;
 import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_CONNECTION_ID_LENGTH;
 import static org.eclipse.californium.scandium.config.DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY;
 import static org.eclipse.leshan.core.LwM2mId.ACCESS_CONTROL;
@@ -78,10 +79,9 @@ import static org.eclipse.leshan.core.LwM2mId.LOCATION;
 import static org.eclipse.leshan.core.LwM2mId.SECURITY;
 import static org.eclipse.leshan.core.LwM2mId.SERVER;
 import static org.eclipse.leshan.core.LwM2mId.SOFTWARE_MANAGEMENT;
-import static org.thingsboard.server.transport.lwm2m.AbstractLwM2MIntegrationTest.serverId;
-import static org.thingsboard.server.transport.lwm2m.AbstractLwM2MIntegrationTest.serverIdBs;
+import static org.eclipse.leshan.core.node.codec.DefaultLwM2mEncoder.getDefaultPathEncoder;
+import static org.thingsboard.server.transport.AbstractTransportIntegrationTest.DEFAULT_WAIT_TIMEOUT_SECONDS;
 import static org.thingsboard.server.transport.lwm2m.AbstractLwM2MIntegrationTest.shortServerId;
-import static org.thingsboard.server.transport.lwm2m.AbstractLwM2MIntegrationTest.shortServerIdBs0;
 import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.BINARY_APP_DATA_CONTAINER;
 import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.LwM2MClientState;
 import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.LwM2MClientState.ON_BOOTSTRAP_FAILURE;
@@ -106,8 +106,10 @@ import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.OBJECT_INST
 import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.OBJECT_INSTANCE_ID_1;
 import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.OBJECT_INSTANCE_ID_12;
 import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.TEMPERATURE_SENSOR;
-import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.resources;
+import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.OBJECT_ID_LWM2M_TEST_OBJECT;
+import static org.thingsboard.server.transport.lwm2m.Lwm2mTestHelper.lwm2mClientResources;
 import static org.thingsboard.server.transport.lwm2m.utils.LwM2MTransportUtil.setDtlsConnectorConfigCidLength;
+import static org.thingsboard.server.utils.PortFinder.isUDPPortAvailable;
 
 
 @Slf4j
@@ -116,6 +118,7 @@ public class LwM2MTestClient {
 
     private final ScheduledExecutorService executor;
     private final String endpoint;
+    private final String[] modelResources;
     private LeshanClient leshanClient;
     private SimpleLwM2MDevice lwM2MDevice;
     private FwLwM2MDevice fwLwM2MDevice;
@@ -127,49 +130,46 @@ public class LwM2MTestClient {
     private Map<LwM2MClientState, Integer> clientDtlsCid;
     private LwM2mUplinkMsgHandler defaultLwM2mUplinkMsgHandlerTest;
     private LwM2mClientContext clientContext;
+    private LwM2mTemperatureSensor lwM2MTemperatureSensor12;
+    private String deviceIdStr;
+    private int clientPort;
 
-    public void init(Security security, Security securityBs, int port, boolean isRpc,
+    public void init(Security securityLwm2m, Security securityBs, int clientPort, boolean isRpc,
                      LwM2mUplinkMsgHandler defaultLwM2mUplinkMsgHandler,
-                     LwM2mClientContext clientContext, boolean isWriteAttribute, Integer cIdLength, boolean queueMode) throws InvalidDDFFileException, IOException {
+                     LwM2mClientContext clientContext, Integer cIdLength, boolean queueMode,
+                     boolean supportFormatOnly_SenMLJSON_SenMLCBOR, Integer value3_0_9) throws InvalidDDFFileException, IOException {
         Assert.assertNull("client already initialized", leshanClient);
+        this.clientPort = clientPort;
         this.defaultLwM2mUplinkMsgHandlerTest = defaultLwM2mUplinkMsgHandler;
         this.clientContext = clientContext;
-        List<ObjectModel> models = new ArrayList<>();
-        for (String resourceName : resources) {
-            models.addAll(ObjectLoader.loadDdfFile(LwM2MTestClient.class.getClassLoader().getResourceAsStream("lwm2m/" + resourceName), resourceName));
-        }
-        LwM2mModel model = new StaticModel(models);
-        ObjectsInitializer initializer = isWriteAttribute ? new TbObjectsInitializer(model) : new ObjectsInitializer(model);
-        if (securityBs != null && security != null) {
-            // SECURITY
-            security.setId(serverId);
-            securityBs.setId(serverIdBs);
-            LwM2mInstanceEnabler[] instances = new LwM2mInstanceEnabler[]{securityBs, security};
-            initializer.setClassForObject(SECURITY, Security.class);
-            initializer.setInstancesForObject(SECURITY, instances);
-            // SERVER
-           Server lwm2mServer = new Server(shortServerId, TimeUnit.MINUTES.toSeconds(60));
-            lwm2mServer.setId(serverId);
-            Server  serverBs = new Server(shortServerIdBs0, TimeUnit.MINUTES.toSeconds(60));
-            serverBs.setId(serverIdBs);
-             instances = new LwM2mInstanceEnabler[]{serverBs, lwm2mServer};
-            initializer.setClassForObject(SERVER, Server.class);
-            initializer.setInstancesForObject(SERVER, instances);
-        } else if (securityBs != null) {
-            // SECURITY
-            initializer.setInstancesForObject(SECURITY, securityBs);
-            // SERVER
-            initializer.setClassForObject(SERVER, Server.class);
-        } else {
-            // SECURITY
-            initializer.setInstancesForObject(SECURITY, security);
-            // SERVER
-            Server lwm2mServer = new Server(shortServerId, TimeUnit.MINUTES.toSeconds(60));
-            lwm2mServer.setId(serverId);
-            initializer.setInstancesForObject(SERVER, lwm2mServer );
-        }
 
-        initializer.setInstancesForObject(DEVICE, lwM2MDevice = new SimpleLwM2MDevice(executor));
+        ObjectsInitializer initializer = createFreshInitializer();
+
+        // SECURITY
+        if (securityLwm2m != null && securityLwm2m.getId() != null) {
+            forceNullSecurityId(securityLwm2m);
+        }
+        if (securityBs != null && securityBs.getId() != null) {
+            forceNullSecurityId(securityBs);
+        }
+        if (securityBs != null && securityLwm2m != null) {
+            log.warn("Security Both: securityBs: [{}] and security Lwm2m  [{}]", securityBs.getId(), securityLwm2m.getId());
+            initializer.setInstancesForObject(SECURITY, securityBs, securityLwm2m);
+        } else if (securityBs != null) {
+            log.warn("Security BS only: securityBs: [{}] ", securityBs.getId());
+            initializer.setInstancesForObject(SECURITY, securityBs);
+        } else if (securityLwm2m != null) {
+            // SECURITY
+            log.warn("Security Lwm2m only: security Lwm2m  [{}]", securityLwm2m.getId());
+            initializer.setInstancesForObject(SECURITY, securityLwm2m);
+        }
+        // SERVER
+        Server serverLwm2m = new Server(shortServerId, TimeUnit.MINUTES.toSeconds(60));
+        initializer.setInstancesForObject(SERVER, serverLwm2m);
+        // DEVICE
+        initializer.setInstancesForObject(DEVICE, lwM2MDevice = new SimpleLwM2MDevice(executor, value3_0_9));
+
+        // OTHER t
         initializer.setInstancesForObject(FIRMWARE, fwLwM2MDevice = new FwLwM2MDevice());
         initializer.setInstancesForObject(SOFTWARE_MANAGEMENT, swLwM2MDevice = new SwLwM2MDevice());
         initializer.setClassForObject(ACCESS_CONTROL, DummyInstanceEnabler.class);
@@ -178,8 +178,10 @@ public class LwM2MTestClient {
         locationParams = new LwM2MLocationParams();
         locationParams.getPos();
         initializer.setInstancesForObject(LOCATION, new LwM2mLocation(locationParams.getLatitude(), locationParams.getLongitude(), locationParams.getScaleFactor(), executor, OBJECT_INSTANCE_ID_0));
-        initializer.setInstancesForObject(TEMPERATURE_SENSOR, lwM2MTemperatureSensor = new LwM2mTemperatureSensor(executor, OBJECT_INSTANCE_ID_0), new LwM2mTemperatureSensor(executor, OBJECT_INSTANCE_ID_12));
-
+        LwM2mTemperatureSensor lwM2mTemperatureSensor0 = new LwM2mTemperatureSensor(executor, OBJECT_INSTANCE_ID_0);
+        lwM2MTemperatureSensor12 = new LwM2mTemperatureSensor(executor, OBJECT_INSTANCE_ID_12);
+        initializer.setInstancesForObject(TEMPERATURE_SENSOR, lwM2mTemperatureSensor0, lwM2MTemperatureSensor12);
+        initializer.setInstancesForObject(OBJECT_ID_LWM2M_TEST_OBJECT, new LwM2mTestObject());
         List<LwM2mObjectEnabler> enablers = initializer.createAll();
 
         // Create Californium Endpoints Provider:
@@ -199,7 +201,9 @@ public class LwM2MTestClient {
                         builder.setSessionListener(new DtlsSessionLogger(clientStates, clientDtlsCid));
 
                         return builder;
-                    };
+                    }
+
+                    ;
                 };
             }
         };
@@ -226,17 +230,17 @@ public class LwM2MTestClient {
         boolean supportDeprecatedCiphers = false;
         clientCoapConfig.set(DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, !supportDeprecatedCiphers);
 
-        if (cIdLength!= null) {
+        if (cIdLength != null) {
             setDtlsConnectorConfigCidLength(clientCoapConfig, cIdLength);
         }
 
-        if (cIdLength!= null) {
+        if (cIdLength != null) {
             setDtlsConnectorConfigCidLength(clientCoapConfig, cIdLength);
         }
 
         // Set Californium Configuration
         endpointsBuilder.setConfiguration(clientCoapConfig);
-        endpointsBuilder.setClientAddress(new InetSocketAddress(port).getAddress());
+        endpointsBuilder.setClientAddress(new InetSocketAddress(clientPort).getAddress());
 
 
         // creates EndpointsProvider
@@ -249,12 +253,12 @@ public class LwM2MTestClient {
 
         // Configure Registration Engine
         DefaultRegistrationEngineFactory engineFactory = new DefaultRegistrationEngineFactory();
-            // old
+        // old
         /**
          * Force reconnection/rehandshake on registration update.
          */
         int comPeriodInSec = 5;
-        if (comPeriodInSec > 0)   engineFactory.setCommunicationPeriod(comPeriodInSec * 1000);
+        if (comPeriodInSec > 0) engineFactory.setCommunicationPeriod(comPeriodInSec * 1000);
 //        engineFactory.setCommunicationPeriod(5000); // old
         /**
          * By default client will try to resume DTLS session by using abbreviated Handshake. This option force to always do a full handshake."
@@ -274,11 +278,27 @@ public class LwM2MTestClient {
         builder.setEndpointsProviders(endpointsProvider.toArray(new LwM2mClientEndpointsProvider[endpointsProvider.size()]));
         builder.setDataSenders(new ManualDataSender());
         builder.setRegistrationEngineFactory(engineFactory);
-        boolean supportOldFormat =  true;
-        if (supportOldFormat) {
+        Map<ContentFormat, NodeDecoder> decoders = new HashMap<>();
+        Map<ContentFormat, NodeEncoder> encoders = new HashMap<>();
+        if (supportFormatOnly_SenMLJSON_SenMLCBOR) {
+//                decoders.put(ContentFormat.OPAQUE, new LwM2mNodeOpaqueDecoder());
+            decoders.put(ContentFormat.CBOR, new LwM2mNodeCborDecoder());
+            decoders.put(ContentFormat.SENML_JSON, new LwM2mNodeSenMLDecoder(new SenMLJsonJacksonEncoderDecoder(), true));
+            decoders.put(ContentFormat.SENML_CBOR, new LwM2mNodeSenMLDecoder(new SenMLCborUpokecenterEncoderDecoder(), false));
+            builder.setDecoder(new DefaultLwM2mDecoder(decoders));
+
+//            encoders.put(ContentFormat.OPAQUE, new LwM2mNodeOpaqueEncoder());
+            encoders.put(ContentFormat.CBOR, new LwM2mNodeCborEncoder());
+            encoders.put(ContentFormat.SENML_JSON, new LwM2mNodeSenMLEncoder(new SenMLJsonJacksonEncoderDecoder()));
+            encoders.put(ContentFormat.SENML_CBOR, new LwM2mNodeSenMLEncoder(new SenMLCborUpokecenterEncoderDecoder()));
+            builder.setEncoder(new DefaultLwM2mEncoder(new LwM2mValueConverterImpl(), false));
+            builder.setEncoder(new DefaultLwM2mEncoder(encoders, getDefaultPathEncoder(), new LwM2mValueConverterImpl()));
+        } else {
+            boolean supportOldFormat = true;
             builder.setDecoder(new DefaultLwM2mDecoder(supportOldFormat));
             builder.setEncoder(new DefaultLwM2mEncoder(new LwM2mValueConverterImpl(), supportOldFormat));
         }
+
 
         builder.setRegistrationEngineFactory(engineFactory);
         builder.setSharedExecutor(executor);
@@ -398,30 +418,68 @@ public class LwM2MTestClient {
 
     public void destroy() {
         if (leshanClient != null) {
-            leshanClient.destroy(true);
+            try {
+                leshanClient.destroy(true);
+            } catch (Exception e) {
+                log.warn("Failed to destroy Leshan client", e);
+            } finally {
+                leshanClient = null;
+            }
         }
-        if (lwM2MDevice != null) {
-            lwM2MDevice.destroy();
-        }
-        if (fwLwM2MDevice != null) {
-            fwLwM2MDevice.destroy();
-        }
-        if (swLwM2MDevice != null) {
-            swLwM2MDevice.destroy();
-        }
-        if (lwM2MBinaryAppDataContainer != null) {
-            lwM2MBinaryAppDataContainer.destroy();
-        }
-        if (lwM2MTemperatureSensor != null) {
-            lwM2MTemperatureSensor.destroy();
+
+        // ThingsBoard custom LwM2M objects
+        destroySafe(lwM2MDevice);
+        destroySafe(fwLwM2MDevice);
+        destroySafe(swLwM2MDevice);
+        destroySafe(lwM2MBinaryAppDataContainer);
+        destroySafe(lwM2MTemperatureSensor);
+        destroySafe(lwM2MTemperatureSensor12);
+
+        lwM2MDevice = null;
+        fwLwM2MDevice = null;
+        swLwM2MDevice = null;
+        lwM2MBinaryAppDataContainer = null;
+        lwM2MTemperatureSensor = null;
+        lwM2MTemperatureSensor12 = null;
+    }
+
+    private void destroySafe(Object obj) {
+        if (obj == null) return;
+        try {
+            Method destroy = obj.getClass().getMethod("destroy");
+            destroy.invoke(obj);
+        } catch (NoSuchMethodException e) {
+            // не має destroy() — ігноруємо
+        } catch (Exception e) {
+            log.warn("Failed to destroy {}", obj.getClass().getSimpleName(), e);
         }
     }
 
     public void start(boolean isStartLw) {
         if (leshanClient != null) {
+            if (clientPort > 0) {
+                log.error("Await UDP clientPort {} to be available before leshanClient.start()", clientPort);
+                await("Await UDP clientPort " + clientPort + " to be available before leshanClient.start()")
+                        .atMost(DEFAULT_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .until(() -> isUDPPortAvailable(clientPort));
+            }
             leshanClient.start();
             if (isStartLw) {
                 this.awaitClientAfterStartConnectLw();
+            }
+            lwM2MTemperatureSensor12.setLeshanClient(leshanClient);
+            fwLwM2MDevice.setLeshanClient(leshanClient);
+        }
+    }
+
+    public void stop(boolean deregister) {
+        if (leshanClient != null) {
+            leshanClient.stop(deregister);
+            if (clientPort > 0) {
+                log.error("Await UDP clientPort {} to disconnect after leshanClient.stop(deregister)", clientPort);
+                await("Await client UDP port " + clientPort + " to disconnect after leshanClient.stop(deregister)")
+                        .atMost(DEFAULT_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .until(() -> isUDPPortAvailable(clientPort));
             }
         }
     }
@@ -430,4 +488,60 @@ public class LwM2MTestClient {
         LwM2mClient lwM2MClient = this.clientContext.getClientByEndpoint(endpoint);
         Mockito.doAnswer(invocationOnMock -> null).when(defaultLwM2mUplinkMsgHandlerTest).initAttributes(lwM2MClient, true);
     }
+
+    private ObjectsInitializer createFreshInitializer() {
+        List<ObjectModel> models = new ArrayList<>(ObjectLoader.loadAllDefault());
+        for (String resourceName : lwm2mClientResources) {
+            try (InputStream in = LwM2MTestClient.class.getClassLoader()
+                    .getResourceAsStream("lwm2m/" + resourceName)) {
+                models.addAll(ObjectLoader.loadDdfFile(in, resourceName));
+            } catch (IOException | InvalidDDFFileException e) {
+                log.warn("Failed to load resource {}", resourceName, e);
+            }
+        }
+        if (this.modelResources != null) {
+            List<ObjectModel> modelsRes = new ArrayList<>();
+            for (String resourceName : this.modelResources) {
+                try (InputStream in = LwM2MTestClient.class.getClassLoader()
+                        .getResourceAsStream("lwm2m/" + resourceName)) {
+                    modelsRes.addAll(ObjectLoader.loadDdfFile(in, resourceName));
+                } catch (IOException | InvalidDDFFileException e) {
+                    log.warn("Failed to load resource {}", resourceName, e);
+                }
+            }
+            Set<Integer> idsToRemove = modelsRes.stream()
+                    .map(m -> m.id)
+                    .collect(Collectors.toSet());
+            models.removeIf(m -> idsToRemove.contains(m.id));
+            models.addAll(modelsRes);
+        }
+        LwM2mModel model = new StaticModel(models);
+        return new ObjectsInitializer(model);
+    }
+
+    private void forceNullSecurityId(Security security) {
+        if (security == null) {
+            return;
+        }
+        try {
+            Field field = security.getClass().getDeclaredField("id");
+            field.setAccessible(true);
+            field.set(security, null);
+            log.info("[forceNullSecurityId] Set id=null for {}", security);
+        } catch (NoSuchFieldException e) {
+            try {
+                //(SecurityObjectInstance)
+                Field field = security.getClass().getSuperclass().getDeclaredField("id");
+                field.setAccessible(true);
+                field.set(security, null);
+                log.info("[forceNullSecurityId] Set id=null for {} (via superclass)", security);
+            } catch (Exception ex) {
+                log.error("[forceNullSecurityId] Field 'id' not found for {}", security.getClass(), ex);
+            }
+        } catch (Exception e) {
+            log.error("[forceNullSecurityId] Failed to set id=null for {}", security.getClass(), e);
+        }
+    }
+
 }
+

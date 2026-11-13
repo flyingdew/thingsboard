@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   AfterViewInit,
   ChangeDetectorRef,
@@ -31,10 +18,10 @@ import {
   ComponentStyle,
   iconStyle,
   overlayStyle,
-  textStyle
+  textStyle,
+  ValueFormatProcessor
 } from '@shared/models/widget-settings.models';
 import { Observable } from 'rxjs';
-import { ResizeObserver } from '@juggle/resize-observer';
 import { ImagePipe } from '@shared/pipe/image.pipe';
 import { DomSanitizer } from '@angular/platform-browser';
 import { ValueType } from '@shared/models/constants';
@@ -44,15 +31,17 @@ import {
   sliderWidgetDefaultSettings,
   SliderWidgetSettings
 } from '@home/components/widget/lib/rpc/slider-widget.models';
-import { formatValue, isDefinedAndNotNull, isNumeric } from '@core/utils';
+import { isDefinedAndNotNull, isNumeric, plainColorFromVariable } from '@core/utils';
 import { WidgetComponent } from '@home/components/widget/widget.component';
 import tinycolor from 'tinycolor2';
+import { UnitService } from '@core/services/unit.service';
 
 @Component({
-  selector: 'tb-slider-widget',
-  templateUrl: './slider-widget.component.html',
-  styleUrls: ['../action/action-widget.scss', './slider-widget.component.scss'],
-  encapsulation: ViewEncapsulation.None
+    selector: 'tb-slider-widget',
+    templateUrl: './slider-widget.component.html',
+    styleUrls: ['../action/action-widget.scss', './slider-widget.component.scss'],
+    encapsulation: ViewEncapsulation.None,
+    standalone: false
 })
 export class SliderWidgetComponent extends
   BasicActionWidgetComponent implements OnInit, AfterViewInit, OnDestroy {
@@ -94,6 +83,7 @@ export class SliderWidgetComponent extends
 
   backgroundStyle$: Observable<ComponentStyle>;
   overlayStyle: ComponentStyle = {};
+  padding: string;
 
   value: number = null;
   private prevValue: number = null;
@@ -114,6 +104,8 @@ export class SliderWidgetComponent extends
 
   showTicks = true;
   ticksStyle: ComponentStyle = {};
+  tickMinText: number;
+  tickMaxText: number;
 
   sliderStep: number = undefined;
 
@@ -126,6 +118,7 @@ export class SliderWidgetComponent extends
   private panelResize$: ResizeObserver;
 
   private valueSetter: ValueSetter<number>;
+  private valueFormat: ValueFormatProcessor;
 
   private sliderCssClass: string;
 
@@ -135,7 +128,8 @@ export class SliderWidgetComponent extends
               private utils: UtilsService,
               private widgetComponent: WidgetComponent,
               protected cd: ChangeDetectorRef,
-              private elementRef: ElementRef) {
+              private elementRef: ElementRef,
+              private unitService: UnitService) {
     super(cd);
   }
 
@@ -145,6 +139,7 @@ export class SliderWidgetComponent extends
 
     this.backgroundStyle$ = backgroundStyle(this.settings.background, this.imagePipe, this.sanitizer);
     this.overlayStyle = overlayStyle(this.settings.background.overlay);
+    this.padding = this.settings.background.overlay.enabled ? undefined : this.settings.padding;
 
     this.layout = this.settings.layout;
 
@@ -153,6 +148,11 @@ export class SliderWidgetComponent extends
     this.showValue = this.layout !== SliderLayout.simplified && this.settings.showValue;
     this.valueStyle = textStyle(this.settings.valueFont);
     this.valueStyle.color = this.settings.valueColor;
+
+    this.valueFormat = ValueFormatProcessor.fromSettings(this.ctx.$injector, {
+      units: this.settings.valueUnits,
+      decimals: this.settings.valueDecimals
+    });
 
     this.showLeftRightIcon = this.layout === SliderLayout.extended;
     if (this.showLeftRightIcon) {
@@ -172,6 +172,8 @@ export class SliderWidgetComponent extends
     if (this.showTicks) {
       this.ticksStyle = textStyle(this.settings.ticksFont);
       this.ticksStyle.color = this.settings.ticksColor;
+      this.tickMinText = this.unitService.convertUnitValue(this.settings.tickMin, this.settings.valueUnits);
+      this.tickMaxText = this.unitService.convertUnitValue(this.settings.tickMax, this.settings.valueUnits);
     }
 
     if (this.settings.showTickMarks) {
@@ -179,7 +181,7 @@ export class SliderWidgetComponent extends
       this.sliderStep = range / (this.settings.tickMarksCount - 1);
     }
 
-    const mainColorInstance = tinycolor(this.settings.mainColor);
+    const mainColorInstance = tinycolor(plainColorFromVariable(this.settings.mainColor));
     const hoverRippleColor = mainColorInstance.clone().setAlpha(mainColorInstance.getAlpha() * 0.05).toRgbString();
     const focusRippleColor = mainColorInstance.clone().setAlpha(mainColorInstance.getAlpha() * 0.2).toRgbString();
 
@@ -256,7 +258,7 @@ export class SliderWidgetComponent extends
   }
 
   private _sliderValueText(value: number): string {
-    return formatValue(value, this.settings.valueDecimals, this.settings.valueUnits, false);
+    return this.valueFormat.format(value);
   }
 
   private onValue(value: number): void {
@@ -268,7 +270,7 @@ export class SliderWidgetComponent extends
 
   private updateValueText() {
     if (isDefinedAndNotNull(this.value) && isNumeric(this.value)) {
-      this.valueText = formatValue(this.value, this.settings.valueDecimals, this.settings.valueUnits, false);
+      this.valueText = this.valueFormat.format(this.value);
     } else {
       this.valueText = 'N/A';
     }

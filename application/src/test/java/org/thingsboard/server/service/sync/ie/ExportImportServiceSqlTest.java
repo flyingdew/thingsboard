@@ -1,575 +1,272 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.service.sync.ie;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
-import com.google.common.collect.Streams;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.thingsboard.common.util.JacksonUtil;
 import org.thingsboard.rule.engine.debug.TbMsgGeneratorNode;
 import org.thingsboard.rule.engine.debug.TbMsgGeneratorNodeConfiguration;
+import org.thingsboard.rule.engine.metadata.TbGetAttributesNode;
+import org.thingsboard.rule.engine.metadata.TbGetAttributesNodeConfiguration;
 import org.thingsboard.server.common.data.Customer;
 import org.thingsboard.server.common.data.Dashboard;
 import org.thingsboard.server.common.data.Device;
 import org.thingsboard.server.common.data.DeviceProfile;
+import org.thingsboard.server.common.data.DeviceProfileType;
+import org.thingsboard.server.common.data.DeviceTransportType;
 import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.EntityView;
+import org.thingsboard.server.common.data.ExportableEntity;
 import org.thingsboard.server.common.data.OtaPackage;
+import org.thingsboard.server.common.data.Tenant;
+import org.thingsboard.server.common.data.User;
 import org.thingsboard.server.common.data.asset.Asset;
 import org.thingsboard.server.common.data.asset.AssetProfile;
 import org.thingsboard.server.common.data.audit.ActionType;
+import org.thingsboard.server.common.data.cf.CalculatedField;
+import org.thingsboard.server.common.data.cf.CalculatedFieldType;
+import org.thingsboard.server.common.data.cf.configuration.Argument;
+import org.thingsboard.server.common.data.cf.configuration.ArgumentType;
+import org.thingsboard.server.common.data.cf.configuration.CalculatedFieldConfiguration;
+import org.thingsboard.server.common.data.cf.configuration.ReferencedEntityKey;
+import org.thingsboard.server.common.data.cf.configuration.SimpleCalculatedFieldConfiguration;
+import org.thingsboard.server.common.data.cf.configuration.TimeSeriesOutput;
+import org.thingsboard.server.common.data.converter.Converter;
+import org.thingsboard.server.common.data.converter.ConverterType;
+import org.thingsboard.server.common.data.debug.DebugSettings;
+import org.thingsboard.server.common.data.device.data.DefaultDeviceTransportConfiguration;
+import org.thingsboard.server.common.data.device.data.DeviceData;
+import org.thingsboard.server.common.data.device.profile.DefaultDeviceProfileConfiguration;
+import org.thingsboard.server.common.data.device.profile.DefaultDeviceProfileTransportConfiguration;
+import org.thingsboard.server.common.data.device.profile.DeviceProfileData;
 import org.thingsboard.server.common.data.edge.EdgeEventActionType;
+import org.thingsboard.server.common.data.group.EntityGroup;
 import org.thingsboard.server.common.data.id.AssetId;
 import org.thingsboard.server.common.data.id.AssetProfileId;
+import org.thingsboard.server.common.data.id.ConverterId;
+import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.DashboardId;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.DeviceProfileId;
+import org.thingsboard.server.common.data.id.EntityGroupId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.EntityViewId;
+import org.thingsboard.server.common.data.id.IntegrationId;
+import org.thingsboard.server.common.data.id.OtaPackageId;
+import org.thingsboard.server.common.data.id.ReportTemplateId;
+import org.thingsboard.server.common.data.id.RoleId;
 import org.thingsboard.server.common.data.id.RuleChainId;
+import org.thingsboard.server.common.data.id.SchedulerEventId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.integration.Integration;
+import org.thingsboard.server.common.data.integration.IntegrationType;
+import org.thingsboard.server.common.data.msg.TbNodeConnectionType;
+import org.thingsboard.server.common.data.ota.ChecksumAlgorithm;
 import org.thingsboard.server.common.data.ota.OtaPackageType;
+import org.thingsboard.server.common.data.permission.GroupPermission;
+import org.thingsboard.server.common.data.permission.MergedUserPermissions;
+import org.thingsboard.server.common.data.permission.Operation;
+import org.thingsboard.server.common.data.permission.Resource;
 import org.thingsboard.server.common.data.plugin.ComponentLifecycleEvent;
+import org.thingsboard.server.common.data.query.AliasEntityId;
+import org.thingsboard.server.common.data.query.SingleEntityFilter;
 import org.thingsboard.server.common.data.relation.EntityRelation;
 import org.thingsboard.server.common.data.relation.RelationTypeGroup;
+import org.thingsboard.server.common.data.report.ReportTemplate;
+import org.thingsboard.server.common.data.report.ReportTemplateType;
+import org.thingsboard.server.common.data.report.TbReportFormat;
+import org.thingsboard.server.common.data.report.configuration.CsvReportTemplateConfig;
+import org.thingsboard.server.common.data.report.configuration.EntityAlias;
+import org.thingsboard.server.common.data.role.Role;
+import org.thingsboard.server.common.data.role.RoleType;
 import org.thingsboard.server.common.data.rule.RuleChain;
 import org.thingsboard.server.common.data.rule.RuleChainMetaData;
+import org.thingsboard.server.common.data.rule.RuleChainType;
 import org.thingsboard.server.common.data.rule.RuleNode;
-import org.thingsboard.server.common.data.script.ScriptLanguage;
-import org.thingsboard.server.common.data.security.DeviceCredentials;
+import org.thingsboard.server.common.data.scheduler.SchedulerEvent;
+import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.common.data.sync.ie.DeviceExportData;
 import org.thingsboard.server.common.data.sync.ie.EntityExportData;
 import org.thingsboard.server.common.data.sync.ie.EntityExportSettings;
 import org.thingsboard.server.common.data.sync.ie.EntityImportResult;
 import org.thingsboard.server.common.data.sync.ie.EntityImportSettings;
 import org.thingsboard.server.common.data.sync.ie.RuleChainExportData;
-import org.thingsboard.server.dao.device.DeviceCredentialsService;
+import org.thingsboard.server.common.data.util.ThrowingRunnable;
+import org.thingsboard.server.controller.AbstractControllerTest;
+import org.thingsboard.server.dao.asset.AssetProfileService;
+import org.thingsboard.server.dao.asset.AssetService;
+import org.thingsboard.server.dao.cf.CalculatedFieldService;
+import org.thingsboard.server.dao.converter.ConverterService;
+import org.thingsboard.server.dao.customer.CustomerService;
+import org.thingsboard.server.dao.dashboard.DashboardService;
+import org.thingsboard.server.dao.device.DeviceProfileService;
+import org.thingsboard.server.dao.device.DeviceService;
+import org.thingsboard.server.dao.entityview.EntityViewService;
+import org.thingsboard.server.dao.grouppermission.GroupPermissionService;
+import org.thingsboard.server.dao.integration.IntegrationService;
+import org.thingsboard.server.dao.ota.OtaPackageService;
+import org.thingsboard.server.dao.relation.RelationService;
+import org.thingsboard.server.dao.report.ReportTemplateService;
+import org.thingsboard.server.dao.role.RoleService;
+import org.thingsboard.server.dao.rule.RuleChainService;
+import org.thingsboard.server.dao.scheduler.SchedulerEventService;
 import org.thingsboard.server.dao.service.DaoSqlTest;
+import org.thingsboard.server.dao.tenant.TenantService;
 import org.thingsboard.server.service.action.EntityActionService;
-import org.thingsboard.server.service.ota.OtaPackageStateService;
+import org.thingsboard.server.dao.ota.OtaPackageStateService;
+import org.thingsboard.server.service.scheduler.SchedulerService;
+import org.thingsboard.server.service.security.model.SecurityUser;
+import org.thingsboard.server.service.security.model.UserPrincipal;
+import org.thingsboard.server.service.security.permission.AccessControlService;
+import org.thingsboard.server.service.security.permission.UserPermissionsService;
+import org.thingsboard.server.service.sync.vc.data.EntitiesImportCtx;
+import org.thingsboard.server.service.sync.vc.data.SimpleEntitiesExportCtx;
 
-import java.util.ArrayList;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.Mockito.verify;
 
 @DaoSqlTest
-public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
+public class ExportImportServiceSqlTest extends AbstractControllerTest {
+
+    @MockitoSpyBean
+    private EntityActionService entityActionService;
+    @MockitoSpyBean
+    private OtaPackageStateService otaPackageStateService;
+    @MockitoSpyBean
+    private UserPermissionsService userPermissionsService;
+    @MockitoSpyBean
+    private AccessControlService accessControlService;
+    @MockitoSpyBean
+    private SchedulerService schedulerService;
 
     @Autowired
-    private DeviceCredentialsService deviceCredentialsService;
-    @SpyBean
-    private EntityActionService entityActionService;
-    @SpyBean
-    private OtaPackageStateService otaPackageStateService;
+    protected EntitiesExportImportService exportImportService;
+    @Autowired
+    protected DeviceService deviceService;
+    @Autowired
+    protected OtaPackageService otaPackageService;
+    @Autowired
+    protected DeviceProfileService deviceProfileService;
+    @Autowired
+    protected AssetProfileService assetProfileService;
+    @Autowired
+    protected AssetService assetService;
+    @Autowired
+    protected CustomerService customerService;
+    @Autowired
+    protected RuleChainService ruleChainService;
+    @Autowired
+    protected DashboardService dashboardService;
+    @Autowired
+    protected RelationService relationService;
+    @Autowired
+    protected TenantService tenantService;
+    @Autowired
+    protected EntityViewService entityViewService;
+    @Autowired
+    protected CalculatedFieldService calculatedFieldService;
+    @Autowired
+    protected GroupPermissionService groupPermissionService;
+    @Autowired
+    protected IntegrationService integrationService;
+    @Autowired
+    protected ConverterService converterService;
+    @Autowired
+    protected RoleService roleService;
+    @Autowired
+    protected SchedulerEventService schedulerEventService;
+    @Autowired
+    protected ReportTemplateService reportTemplateService;
 
-    @Test
-    public void testExportImportAssetWithProfile_betweenTenants() throws Exception {
-        AssetProfile assetProfile = createAssetProfile(tenantId1, null, null, "Asset profile of tenant 1");
-        Asset asset = createAsset(tenantId1, null, assetProfile.getId(), "Asset of tenant 1");
+    protected TenantId tenantId1;
+    protected User tenantAdmin1;
 
-        EntityExportData<AssetProfile> profileExportData = exportEntity(tenantAdmin1, assetProfile.getId());
+    protected TenantId tenantId2;
+    protected User tenantAdmin2;
 
-        EntityExportData<Asset> assetExportData = exportEntity(tenantAdmin1, asset.getId());
-
-        EntityImportResult<AssetProfile> profileImportResult = importEntity(tenantAdmin2, profileExportData);
-        checkImportedEntity(tenantId1, assetProfile, tenantId2, profileImportResult.getSavedEntity());
-        checkImportedAssetProfileData(assetProfile, profileImportResult.getSavedEntity());
-
-        EntityImportResult<Asset> assetImportResult = importEntity(tenantAdmin2, assetExportData);
-        Asset importedAsset = assetImportResult.getSavedEntity();
-        checkImportedEntity(tenantId1, asset, tenantId2, importedAsset);
-        checkImportedAssetData(asset, importedAsset);
-
-        assertThat(importedAsset.getAssetProfileId()).isEqualTo(profileImportResult.getSavedEntity().getId());
+    @Before
+    public void beforeEach() throws Exception {
+        loginSysAdmin();
+        Tenant tenant1 = new Tenant();
+        tenant1.setTitle("Tenant 1");
+        tenant1.setEmail("tenant1@thingsboard.org");
+        this.tenantId1 = tenantService.saveTenant(tenant1).getId();
+        User tenantAdmin1 = new User();
+        tenantAdmin1.setTenantId(tenantId1);
+        tenantAdmin1.setAuthority(Authority.TENANT_ADMIN);
+        tenantAdmin1.setEmail("tenant1-admin@thingsboard.org");
+        this.tenantAdmin1 = createUser(tenantAdmin1, "12345678");
+        Tenant tenant2 = new Tenant();
+        tenant2.setTitle("Tenant 2");
+        tenant2.setEmail("tenant2@thingsboard.org");
+        this.tenantId2 = tenantService.saveTenant(tenant2).getId();
+        User tenantAdmin2 = new User();
+        tenantAdmin2.setTenantId(tenantId2);
+        tenantAdmin2.setAuthority(Authority.TENANT_ADMIN);
+        tenantAdmin2.setEmail("tenant2-admin@thingsboard.org");
+        this.tenantAdmin2 = createUser(tenantAdmin2, "12345678");
     }
 
-    @Test
-    public void testExportImportAsset_sameTenant() throws Exception {
-        AssetProfile assetProfile = createAssetProfile(tenantId1, null, null, "Asset profile v1.0");
-        Asset asset = createAsset(tenantId1, null, assetProfile.getId(), "Asset v1.0");
-        EntityExportData<Asset> exportData = exportEntity(tenantAdmin1, asset.getId());
-
-        EntityImportResult<Asset> importResult = importEntity(tenantAdmin1, exportData);
-        checkImportedEntity(tenantId1, asset, tenantId1, importResult.getSavedEntity());
-        checkImportedAssetData(asset, importResult.getSavedEntity());
-    }
-
-    @Test
-    public void testExportImportAsset_sameTenant_withCustomer() throws Exception {
-        AssetProfile assetProfile = createAssetProfile(tenantId1, null, null, "Asset profile v1.0");
-        Customer customer = createCustomer(tenantId1, "My customer");
-        Asset asset = createAsset(tenantId1, customer.getId(), assetProfile.getId(), "My asset");
-
-        Asset importedAsset = importEntity(tenantAdmin1, this.<Asset, AssetId>exportEntity(tenantAdmin1, asset.getId())).getSavedEntity();
-        assertThat(importedAsset.getCustomerId()).isEqualTo(asset.getCustomerId());
-    }
-
-
-    @Test
-    public void testExportImportCustomer_betweenTenants() throws Exception {
-        Customer customer = createCustomer(tenantAdmin1.getTenantId(), "Customer of tenant 1");
-        EntityExportData<Customer> exportData = exportEntity(tenantAdmin1, customer.getId());
-
-        EntityImportResult<Customer> importResult = importEntity(tenantAdmin2, exportData);
-        checkImportedEntity(tenantId1, customer, tenantId2, importResult.getSavedEntity());
-        checkImportedCustomerData(customer, importResult.getSavedEntity());
-    }
-
-    @Test
-    public void testExportImportCustomer_sameTenant() throws Exception {
-        Customer customer = createCustomer(tenantAdmin1.getTenantId(), "Customer v1.0");
-        EntityExportData<Customer> exportData = exportEntity(tenantAdmin1, customer.getId());
-
-        EntityImportResult<Customer> importResult = importEntity(tenantAdmin1, exportData);
-        checkImportedEntity(tenantId1, customer, tenantId1, importResult.getSavedEntity());
-        checkImportedCustomerData(customer, importResult.getSavedEntity());
-    }
-
-
-    @Test
-    public void testExportImportDeviceWithProfile_betweenTenants() throws Exception {
-        DeviceProfile deviceProfile = createDeviceProfile(tenantId1, null, null, "Device profile of tenant 1");
-        Device device = createDevice(tenantId1, null, deviceProfile.getId(), "Device of tenant 1");
-        DeviceCredentials credentials = deviceCredentialsService.findDeviceCredentialsByDeviceId(tenantId1, device.getId());
-
-        EntityExportData<DeviceProfile> profileExportData = exportEntity(tenantAdmin1, deviceProfile.getId());
-
-        EntityExportData<Device> deviceExportData = exportEntity(tenantAdmin1, device.getId());
-        DeviceCredentials exportedCredentials = ((DeviceExportData) deviceExportData).getCredentials();
-        exportedCredentials.setCredentialsId(credentials.getCredentialsId() + "a");
-
-        EntityImportResult<DeviceProfile> profileImportResult = importEntity(tenantAdmin2, profileExportData);
-        checkImportedEntity(tenantId1, deviceProfile, tenantId2, profileImportResult.getSavedEntity());
-        checkImportedDeviceProfileData(deviceProfile, profileImportResult.getSavedEntity());
-
-        EntityImportResult<Device> deviceImportResult = importEntity(tenantAdmin2, deviceExportData);
-        Device importedDevice = deviceImportResult.getSavedEntity();
-        checkImportedEntity(tenantId1, device, tenantId2, deviceImportResult.getSavedEntity());
-        checkImportedDeviceData(device, importedDevice);
-
-        assertThat(importedDevice.getDeviceProfileId()).isEqualTo(profileImportResult.getSavedEntity().getId());
-
-        DeviceCredentials importedCredentials = deviceCredentialsService.findDeviceCredentialsByDeviceId(tenantId2, importedDevice.getId());
-        assertThat(importedCredentials.getId()).isNotEqualTo(credentials.getId());
-        assertThat(importedCredentials.getCredentialsId()).isEqualTo(exportedCredentials.getCredentialsId());
-        assertThat(importedCredentials.getCredentialsValue()).isEqualTo(credentials.getCredentialsValue());
-        assertThat(importedCredentials.getCredentialsType()).isEqualTo(credentials.getCredentialsType());
-    }
-
-    @Test
-    public void testExportImportDevice_sameTenant() throws Exception {
-        DeviceProfile deviceProfile = createDeviceProfile(tenantId1, null, null, "Device profile v1.0");
-        OtaPackage firmware = createOtaPackage(tenantId1, deviceProfile.getId(), OtaPackageType.FIRMWARE);
-        OtaPackage software = createOtaPackage(tenantId1, deviceProfile.getId(), OtaPackageType.SOFTWARE);
-        Device device = createDevice(tenantId1, null, deviceProfile.getId(), "Device v1.0");
-        device.setFirmwareId(firmware.getId());
-        device.setSoftwareId(software.getId());
-        device = deviceService.saveDevice(device);
-
-        DeviceCredentials credentials = deviceCredentialsService.findDeviceCredentialsByDeviceId(tenantId1, device.getId());
-
-        EntityExportData<Device> deviceExportData = exportEntity(tenantAdmin1, device.getId());
-
-        EntityImportResult<Device> importResult = importEntity(tenantAdmin1, deviceExportData);
-        Device importedDevice = importResult.getSavedEntity();
-
-        checkImportedEntity(tenantId1, device, tenantId1, importResult.getSavedEntity());
-        assertThat(importedDevice.getDeviceProfileId()).isEqualTo(device.getDeviceProfileId());
-        assertThat(deviceCredentialsService.findDeviceCredentialsByDeviceId(tenantId1, device.getId())).isEqualTo(credentials);
-        assertThat(importedDevice.getFirmwareId()).isEqualTo(firmware.getId());
-        assertThat(importedDevice.getSoftwareId()).isEqualTo(software.getId());
-    }
-
-
-    @Test
-    public void testExportImportDashboard_betweenTenants() throws Exception {
-        Dashboard dashboard = createDashboard(tenantAdmin1.getTenantId(), null, "Dashboard of tenant 1");
-        EntityExportData<Dashboard> exportData = exportEntity(tenantAdmin1, dashboard.getId());
-
-        EntityImportResult<Dashboard> importResult = importEntity(tenantAdmin2, exportData);
-        checkImportedEntity(tenantId1, dashboard, tenantId2, importResult.getSavedEntity());
-        checkImportedDashboardData(dashboard, importResult.getSavedEntity());
-    }
-
-    @Test
-    public void testExportImportDashboard_sameTenant() throws Exception {
-        Dashboard dashboard = createDashboard(tenantAdmin1.getTenantId(), null, "Dashboard v1.0");
-        EntityExportData<Dashboard> exportData = exportEntity(tenantAdmin1, dashboard.getId());
-
-        EntityImportResult<Dashboard> importResult = importEntity(tenantAdmin1, exportData);
-        checkImportedEntity(tenantId1, dashboard, tenantId1, importResult.getSavedEntity());
-        checkImportedDashboardData(dashboard, importResult.getSavedEntity());
-    }
-
-    @Test
-    public void testExportImportDashboard_betweenTenants_withCustomer_updated() throws Exception {
-        Dashboard dashboard = createDashboard(tenantAdmin1.getTenantId(), null, "Dashboard of tenant 1");
-        EntityExportData<Dashboard> exportData = exportEntity(tenantAdmin1, dashboard.getId());
-
-        Dashboard importedDashboard = importEntity(tenantAdmin2, exportData).getSavedEntity();
-        checkImportedEntity(tenantId1, dashboard, tenantId2, importedDashboard);
-
-        Customer customer = createCustomer(tenantId1, "Customer 1");
-        EntityExportData<Customer> customerExportData = exportEntity(tenantAdmin1, customer.getId());
-        dashboardService.assignDashboardToCustomer(tenantId1, dashboard.getId(), customer.getId());
-        exportData = exportEntity(tenantAdmin1, dashboard.getId());
-
-        Customer importedCustomer = importEntity(tenantAdmin2, customerExportData).getSavedEntity();
-        importedDashboard = importEntity(tenantAdmin2, exportData).getSavedEntity();
-        assertThat(importedDashboard.getAssignedCustomers()).hasOnlyOneElementSatisfying(customerInfo -> {
-            assertThat(customerInfo.getCustomerId()).isEqualTo(importedCustomer.getId());
-        });
-    }
-
-    @Test
-    public void testExportImportDashboard_betweenTenants_withEntityAliases() throws Exception {
-        AssetProfile assetProfile = createAssetProfile(tenantId1, null, null, "A");
-        Asset asset1 = createAsset(tenantId1, null, assetProfile.getId(), "Asset 1");
-        Asset asset2 = createAsset(tenantId1, null, assetProfile.getId(), "Asset 2");
-        Dashboard dashboard = createDashboard(tenantId1, null, "Dashboard 1");
-        Dashboard otherDashboard = createDashboard(tenantId1, null, "Dashboard 2");
-        DeviceProfile existingDeviceProfile = createDeviceProfile(tenantId2, null, null, "Existing");
-
-        String aliasId = "23c4185d-1497-9457-30b2-6d91e69a5b2c";
-        String unknownUuid = "ea0dc8b0-3d85-11ed-9200-77fc04fa14fa";
-        String entityAliases = "{\n" +
-                "\"" + aliasId + "\": {\n" +
-                "\"alias\": \"assets\",\n" +
-                "\"filter\": {\n" +
-                "   \"entityList\": [\n" +
-                "   \"" + asset1.getId() + "\",\n" +
-                "   \"" + asset2.getId() + "\",\n" +
-                "   \"" + tenantId1.getId() + "\",\n" +
-                "   \"" + existingDeviceProfile.getId() + "\",\n" +
-                "   \"" + unknownUuid + "\"\n" +
-                "   ],\n" +
-                "   \"id\":\"" + asset1.getId() + "\",\n" +
-                "   \"resolveMultiple\": true\n" +
-                "},\n" +
-                "\"id\": \"" + aliasId + "\"\n" +
-                "}\n" +
-                "}";
-        String widgetId = "ea8f34a0-264a-f11f-cde3-05201bb4ff4b";
-        String actionId = "4a8e6efa-3e68-fa59-7feb-d83366130cae";
-        String widgets = "{\n" +
-                "  \"" + widgetId + "\": {\n" +
-                "    \"config\": {\n" +
-                "      \"actions\": {\n" +
-                "        \"rowClick\": [\n" +
-                "          {\n" +
-                "            \"name\": \"go to dashboard\",\n" +
-                "            \"targetDashboardId\": \"" + otherDashboard.getId() + "\",\n" +
-                "            \"id\": \"" + actionId + "\"\n" +
-                "          }\n" +
-                "        ]\n" +
-                "      }\n" +
-                "    },\n" +
-                "    \"row\": 0,\n" +
-                "    \"col\": 0,\n" +
-                "    \"id\": \"" + widgetId + "\"\n" +
-                "  }\n" +
-                "}";
-
-        ObjectNode dashboardConfiguration = JacksonUtil.newObjectNode();
-        dashboardConfiguration.set("entityAliases", JacksonUtil.toJsonNode(entityAliases));
-        dashboardConfiguration.set("widgets", JacksonUtil.toJsonNode(widgets));
-        dashboardConfiguration.set("description", new TextNode("hallo"));
-        dashboard.setConfiguration(dashboardConfiguration);
-        dashboard = dashboardService.saveDashboard(dashboard);
-
-        EntityExportData<AssetProfile> profileExportData = exportEntity(tenantAdmin1, assetProfile.getId());
-
-        EntityExportData<Asset> asset1ExportData = exportEntity(tenantAdmin1, asset1.getId());
-        EntityExportData<Asset> asset2ExportData = exportEntity(tenantAdmin1, asset2.getId());
-        EntityExportData<Dashboard> dashboardExportData = exportEntity(tenantAdmin1, dashboard.getId());
-        EntityExportData<Dashboard> otherDashboardExportData = exportEntity(tenantAdmin1, otherDashboard.getId());
-
-        AssetProfile importedProfile = importEntity(tenantAdmin2, profileExportData).getSavedEntity();
-        Asset importedAsset1 = importEntity(tenantAdmin2, asset1ExportData).getSavedEntity();
-        Asset importedAsset2 = importEntity(tenantAdmin2, asset2ExportData).getSavedEntity();
-        Dashboard importedOtherDashboard = importEntity(tenantAdmin2, otherDashboardExportData).getSavedEntity();
-        Dashboard importedDashboard = importEntity(tenantAdmin2, dashboardExportData).getSavedEntity();
-
-        Map.Entry<String, JsonNode> entityAlias = importedDashboard.getConfiguration().get("entityAliases").fields().next();
-        assertThat(entityAlias.getKey()).isEqualTo(aliasId);
-        assertThat(entityAlias.getValue().get("id").asText()).isEqualTo(aliasId);
-
-        List<String> aliasEntitiesIds = Streams.stream(entityAlias.getValue().get("filter").get("entityList").elements())
-                .map(JsonNode::asText).collect(Collectors.toList());
-        assertThat(aliasEntitiesIds).size().isEqualTo(5);
-        assertThat(aliasEntitiesIds).element(0).as("external asset 1 was replaced with imported one")
-                .isEqualTo(importedAsset1.getId().toString());
-        assertThat(aliasEntitiesIds).element(1).as("external asset 2 was replaced with imported one")
-                .isEqualTo(importedAsset2.getId().toString());
-        assertThat(aliasEntitiesIds).element(2).as("external tenant id was replaced with new tenant id")
-                .isEqualTo(tenantId2.toString());
-        assertThat(aliasEntitiesIds).element(3).as("existing device profile id was left as is")
-                .isEqualTo(existingDeviceProfile.getId().toString());
-        assertThat(aliasEntitiesIds).element(4).as("unresolved uuid was replaced with tenant id")
-                .isEqualTo(tenantId2.toString());
-        assertThat(entityAlias.getValue().get("filter").get("id").asText()).as("external asset 1 was replaced with imported one")
-                .isEqualTo(importedAsset1.getId().toString());
-
-        ObjectNode widgetConfig = importedDashboard.getWidgetsConfig().get(0);
-        assertThat(widgetConfig.get("id").asText()).as("widget id is not replaced")
-                .isEqualTo(widgetId);
-        JsonNode actionConfig = widgetConfig.get("config").get("actions").get("rowClick").get(0);
-        assertThat(actionConfig.get("id").asText()).as("action id is not replaced")
-                .isEqualTo(actionId);
-        assertThat(actionConfig.get("targetDashboardId").asText()).as("dashboard id is replaced with imported one")
-                .isEqualTo(importedOtherDashboard.getId().toString());
-    }
-
-
-    @Test
-    public void testExportImportRuleChain_betweenTenants() throws Exception {
-        RuleChain ruleChain = createRuleChain(tenantId1, "Rule chain of tenant 1");
-        RuleChainMetaData metaData = ruleChainService.loadRuleChainMetaData(tenantId1, ruleChain.getId());
-        EntityExportData<RuleChain> exportData = exportEntity(tenantAdmin1, ruleChain.getId());
-
-        EntityImportResult<RuleChain> importResult = importEntity(tenantAdmin2, exportData);
-        RuleChain importedRuleChain = importResult.getSavedEntity();
-        RuleChainMetaData importedMetaData = ruleChainService.loadRuleChainMetaData(tenantId2, importedRuleChain.getId());
-
-        checkImportedEntity(tenantId1, ruleChain, tenantId2, importResult.getSavedEntity());
-        checkImportedRuleChainData(ruleChain, metaData, importedRuleChain, importedMetaData);
-    }
-
-    @Test
-    public void testExportImportRuleChain_sameTenant() throws Exception {
-        RuleChain ruleChain = createRuleChain(tenantId1, "Rule chain v1.0");
-        RuleChainMetaData metaData = ruleChainService.loadRuleChainMetaData(tenantId1, ruleChain.getId());
-        EntityExportData<RuleChain> exportData = exportEntity(tenantAdmin1, ruleChain.getId());
-
-        EntityImportResult<RuleChain> importResult = importEntity(tenantAdmin1, exportData);
-        RuleChain importedRuleChain = importResult.getSavedEntity();
-        RuleChainMetaData importedMetaData = ruleChainService.loadRuleChainMetaData(tenantId1, importedRuleChain.getId());
-
-        checkImportedEntity(tenantId1, ruleChain, tenantId1, importResult.getSavedEntity());
-        checkImportedRuleChainData(ruleChain, metaData, importedRuleChain, importedMetaData);
-    }
-
-    @Test
-    public void testImportRuleChain_ruleNodesConfigs() throws Exception {
-        Customer customer = createCustomer(tenantId1, "Customer 1");
-        RuleChain ruleChain = createRuleChain(tenantId1, "Rule chain 1");
-        RuleChainMetaData metaData = ruleChainService.loadRuleChainMetaData(tenantId1, ruleChain.getId());
-
-        List<RuleNode> nodes = new ArrayList<>(metaData.getNodes());
-        RuleNode generatorNode = new RuleNode();
-        generatorNode.setName("Generator");
-        generatorNode.setType(TbMsgGeneratorNode.class.getName());
-        TbMsgGeneratorNodeConfiguration generatorNodeConfig = new TbMsgGeneratorNodeConfiguration();
-        generatorNodeConfig.setOriginatorType(EntityType.ASSET_PROFILE);
-        generatorNodeConfig.setOriginatorId(customer.getId().toString());
-        generatorNodeConfig.setPeriodInSeconds(5);
-        generatorNodeConfig.setMsgCount(1);
-        generatorNodeConfig.setScriptLang(ScriptLanguage.JS);
-        UUID someUuid = UUID.randomUUID();
-        generatorNodeConfig.setJsScript("var msg = { temp: 42, humidity: 77 };\n" +
-                "var metadata = { data: 40 };\n" +
-                "var msgType = \"POST_TELEMETRY_REQUEST\";\n" +
-                "var someUuid = \"" + someUuid + "\";\n" +
-                "return { msg: msg, metadata: metadata, msgType: msgType };");
-        generatorNode.setConfiguration(JacksonUtil.valueToTree(generatorNodeConfig));
-        nodes.add(generatorNode);
-        metaData.setNodes(nodes);
-        ruleChainService.saveRuleChainMetaData(tenantId1, metaData, Function.identity());
-
-        EntityExportData<RuleChain> ruleChainExportData = exportEntity(tenantAdmin1, ruleChain.getId());
-        EntityExportData<Customer> customerExportData = exportEntity(tenantAdmin1, customer.getId());
-
-        Customer importedCustomer = importEntity(tenantAdmin2, customerExportData).getSavedEntity();
-        RuleChain importedRuleChain = importEntity(tenantAdmin2, ruleChainExportData).getSavedEntity();
-        RuleChainMetaData importedMetaData = ruleChainService.loadRuleChainMetaData(tenantId2, importedRuleChain.getId());
-
-        TbMsgGeneratorNodeConfiguration importedGeneratorNodeConfig = JacksonUtil.treeToValue(importedMetaData.getNodes().stream()
-                .filter(node -> node.getName().equals(generatorNode.getName()))
-                .findFirst().get().getConfiguration(), TbMsgGeneratorNodeConfiguration.class);
-        assertThat(importedGeneratorNodeConfig.getOriginatorId()).isEqualTo(importedCustomer.getId().toString());
-        assertThat(importedGeneratorNodeConfig.getJsScript()).contains("var someUuid = \"" + someUuid + "\";");
-    }
-
-
-    @Test
-    public void testExportImportWithInboundRelations_betweenTenants() throws Exception {
-        Asset asset = createAsset(tenantId1, null, null, "Asset 1");
-        Device device = createDevice(tenantId1, null, null, "Device 1");
-        EntityRelation relation = createRelation(asset.getId(), device.getId());
-
-        EntityExportData<Asset> assetExportData = exportEntity(tenantAdmin1, asset.getId());
-        EntityExportData<Device> deviceExportData = exportEntity(tenantAdmin1, device.getId(), EntityExportSettings.builder()
-                .exportRelations(true)
-                .exportCredentials(false)
-                .build());
-
-        assertThat(deviceExportData.getRelations()).size().isOne();
-        assertThat(deviceExportData.getRelations().get(0)).matches(entityRelation -> {
-            return entityRelation.getFrom().equals(asset.getId()) && entityRelation.getTo().equals(device.getId());
-        });
-        ((Asset) assetExportData.getEntity()).setAssetProfileId(null);
-        ((Device) deviceExportData.getEntity()).setDeviceProfileId(null);
-
-        Asset importedAsset = importEntity(tenantAdmin2, assetExportData).getSavedEntity();
-        Device importedDevice = importEntity(tenantAdmin2, deviceExportData, EntityImportSettings.builder()
-                .updateRelations(true)
-                .build()).getSavedEntity();
-        checkImportedEntity(tenantId1, device, tenantId2, importedDevice);
-        checkImportedEntity(tenantId1, asset, tenantId2, importedAsset);
-
-        List<EntityRelation> importedRelations = relationService.findByTo(TenantId.SYS_TENANT_ID, importedDevice.getId(), RelationTypeGroup.COMMON);
-        assertThat(importedRelations).size().isOne();
-        assertThat(importedRelations.get(0)).satisfies(importedRelation -> {
-            assertThat(importedRelation.getFrom()).isEqualTo(importedAsset.getId());
-            assertThat(importedRelation.getType()).isEqualTo(relation.getType());
-            assertThat(importedRelation.getAdditionalInfo()).isEqualTo(relation.getAdditionalInfo());
-        });
-    }
-
-    @Test
-    public void testExportImportWithRelations_betweenTenants() throws Exception {
-        Asset asset = createAsset(tenantId1, null, null, "Asset 1");
-        Device device = createDevice(tenantId1, null, null, "Device 1");
-        EntityRelation relation = createRelation(asset.getId(), device.getId());
-
-        EntityExportData<Asset> assetExportData = exportEntity(tenantAdmin1, asset.getId());
-        EntityExportData<Device> deviceExportData = exportEntity(tenantAdmin1, device.getId(), EntityExportSettings.builder()
-                .exportRelations(true)
-                .exportCredentials(false)
-                .build());
-        assetExportData.getEntity().setAssetProfileId(null);
-        deviceExportData.getEntity().setDeviceProfileId(null);
-
-        Asset importedAsset = importEntity(tenantAdmin2, assetExportData).getSavedEntity();
-        Device importedDevice = importEntity(tenantAdmin2, deviceExportData, EntityImportSettings.builder()
-                .updateRelations(true)
-                .build()).getSavedEntity();
-
-        List<EntityRelation> importedRelations = relationService.findByTo(TenantId.SYS_TENANT_ID, importedDevice.getId(), RelationTypeGroup.COMMON);
-        assertThat(importedRelations).size().isOne();
-        assertThat(importedRelations.get(0)).satisfies(importedRelation -> {
-            assertThat(importedRelation.getFrom()).isEqualTo(importedAsset.getId());
-            assertThat(importedRelation.getType()).isEqualTo(relation.getType());
-            assertThat(importedRelation.getAdditionalInfo()).isEqualTo(relation.getAdditionalInfo());
-        });
-    }
-
-    @Test
-    public void testExportImportWithRelations_sameTenant() throws Exception {
-        Asset asset = createAsset(tenantId1, null, null, "Asset 1");
-        Device device1 = createDevice(tenantId1, null, null, "Device 1");
-        EntityRelation relation1 = createRelation(asset.getId(), device1.getId());
-
-        EntityExportData<Asset> assetExportData = exportEntity(tenantAdmin1, asset.getId(), EntityExportSettings.builder()
-                .exportRelations(true)
-                .build());
-        assertThat(assetExportData.getRelations()).size().isOne();
-
-        Device device2 = createDevice(tenantId1, null, null, "Device 2");
-        EntityRelation relation2 = createRelation(asset.getId(), device2.getId());
-
-        importEntity(tenantAdmin1, assetExportData, EntityImportSettings.builder()
-                .updateRelations(true)
-                .build());
-
-        List<EntityRelation> relations = relationService.findByFrom(TenantId.SYS_TENANT_ID, asset.getId(), RelationTypeGroup.COMMON);
-        assertThat(relations).contains(relation1);
-        assertThat(relations).doesNotContain(relation2);
-    }
-
-    @Test
-    public void textExportImportWithRelations_sameTenant_removeExisting() throws Exception {
-        Asset asset1 = createAsset(tenantId1, null, null, "Asset 1");
-        Device device = createDevice(tenantId1, null, null, "Device 1");
-        EntityRelation relation1 = createRelation(asset1.getId(), device.getId());
-
-        EntityExportData<Device> deviceExportData = exportEntity(tenantAdmin1, device.getId(), EntityExportSettings.builder()
-                .exportRelations(true)
-                .build());
-        assertThat(deviceExportData.getRelations()).size().isOne();
-
-        Asset asset2 = createAsset(tenantId1, null, null, "Asset 2");
-        EntityRelation relation2 = createRelation(asset2.getId(), device.getId());
-
-        importEntity(tenantAdmin1, deviceExportData, EntityImportSettings.builder()
-                .updateRelations(true)
-                .build());
-
-        List<EntityRelation> relations = relationService.findByTo(TenantId.SYS_TENANT_ID, device.getId(), RelationTypeGroup.COMMON);
-        assertThat(relations).contains(relation1);
-        assertThat(relations).doesNotContain(relation2);
-    }
-
-
-    @Test
-    public void testExportImportDefaultDeviceProfile_betweenTenants_findExisting() throws Exception {
-        DeviceProfile defaultDeviceProfile = deviceProfileService.findDefaultDeviceProfile(tenantId1);
-        defaultDeviceProfile.setName("non-default-name");
-        deviceProfileService.saveDeviceProfile(defaultDeviceProfile);
-        EntityExportData<DeviceProfile> deviceProfileExportData = exportEntity(tenantAdmin1, defaultDeviceProfile.getId());
-
-        importEntity(tenantAdmin2, deviceProfileExportData, EntityImportSettings.builder()
-                .findExistingByName(false)
-                .build());
-        DeviceProfile importedDeviceProfile = deviceProfileService.findDefaultDeviceProfile(tenantId2);
-        assertThat(importedDeviceProfile.isDefault()).isTrue();
-        assertThat(importedDeviceProfile.getName()).isEqualTo(defaultDeviceProfile.getName());
-        checkImportedEntity(tenantId1, defaultDeviceProfile, tenantId2, importedDeviceProfile);
-    }
-
-
-    @SuppressWarnings("rawTypes")
-    private static EntityExportData getAndClone(Map<EntityType, EntityExportData> map, EntityType entityType) {
-        return JacksonUtil.clone(map.get(entityType));
+    @After
+    public void afterEach() {
+        tenantService.deleteTenant(tenantId1);
+        tenantService.deleteTenant(tenantId2);
     }
 
     @SuppressWarnings({"rawTypes", "unchecked"})
     @Test
     public void testEntityEventsOnImport() throws Exception {
-        Customer customer = createCustomer(tenantId1, "Customer 1");
+        Customer customer = createCustomer(tenantId1, null, "Customer 1");
         RuleChain ruleChain = createRuleChain(tenantId1, "Rule chain 1");
         Dashboard dashboard = createDashboard(tenantId1, null, "Dashboard 1");
         AssetProfile assetProfile = createAssetProfile(tenantId1, ruleChain.getId(), dashboard.getId(), "Asset profile 1");
-        Asset asset = createAsset(tenantId1, null, assetProfile.getId(), "Asset 1");
+        Asset asset = createAsset(tenantId1, null, assetProfile.getId(), null, "Asset 1");
         DeviceProfile deviceProfile = createDeviceProfile(tenantId1, ruleChain.getId(), dashboard.getId(), "Device profile 1");
-        Device device = createDevice(tenantId1, null, deviceProfile.getId(), "Device 1");
+        OtaPackage firmware = createOtaPackage(tenantId1, deviceProfile.getId(), OtaPackageType.FIRMWARE);
+        Device device = createDevice(tenantId1, null, deviceProfile.getId(), null, "Device 1", firmware.getId());
+        CalculatedField calculatedField = createCalculatedField(tenantId1, device.getId(), asset.getId());
+        Converter converter = createConverter(tenantId1, ConverterType.DOWNLINK, "Converter 1");
+        Integration integration = createIntegration(tenantId1, converter.getId(), IntegrationType.HTTP, "Integration 1");
+        Role role = createGenericRole(tenantId1, null, "Role 1", Map.of(Resource.DEVICE, List.of(Operation.READ)));
+        EntityGroup userGroup = createEntityGroup(tenantId1, EntityType.USER, "User group 1");
+        createGroupPermission(tenantId1, userGroup.getId(), role.getId());
+        SchedulerEvent schedulerEvent = createSchedulerEvent(tenantId1, device.getId(), "Scheduler Event 1", "report");
+        ReportTemplate reportTemplate = createReportTemplate(tenantId1, null, "Weekly report template", device.getId());
 
         Map<EntityType, EntityExportData> entitiesExportData = Stream.of(customer.getId(), asset.getId(), device.getId(),
-                        ruleChain.getId(), dashboard.getId(), assetProfile.getId(), deviceProfile.getId())
+                        ruleChain.getId(), dashboard.getId(), assetProfile.getId(), deviceProfile.getId(), converter.getId(),
+                        integration.getId(), role.getId(), userGroup.getId(), firmware.getId(), schedulerEvent.getId(), reportTemplate.getId())
                 .map(entityId -> {
                     try {
                         return exportEntity(tenantAdmin1, entityId, EntityExportSettings.builder()
                                 .exportCredentials(false)
+                                .exportCalculatedFields(true)
+                                .exportPermissions(true)
                                 .build());
                     } catch (Exception e) {
                         throw new RuntimeException(e);
@@ -577,7 +274,7 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
                 })
                 .collect(Collectors.toMap(EntityExportData::getEntityType, d -> d));
 
-        Mockito.reset(entityActionService);
+        Mockito.reset(entityActionService, tbClusterService);
         Customer importedCustomer = (Customer) importEntity(tenantAdmin2, getAndClone(entitiesExportData, EntityType.CUSTOMER)).getSavedEntity();
         verify(entityActionService).logEntityAction(any(), eq(importedCustomer.getId()), eq(importedCustomer),
                 any(), eq(ActionType.ADDED), isNull());
@@ -591,7 +288,7 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
         Customer updatedCustomer = importEntity(tenantAdmin2, updatedCustomerEntity).getSavedEntity();
         verify(entityActionService).logEntityAction(any(), eq(importedCustomer.getId()), eq(updatedCustomer),
                 any(), eq(ActionType.UPDATED), isNull());
-        verify(tbClusterService).sendNotificationMsgToEdge(any(), any(), eq(importedCustomer.getId()), any(), any(), eq(EdgeEventActionType.UPDATED), any());
+        verify(tbClusterService).sendNotificationMsgToEdge(any(), any(), eq(importedCustomer.getId()), any(), any(), eq(EdgeEventActionType.UPDATED), any(), any(), any());
 
         Mockito.reset(entityActionService);
 
@@ -617,21 +314,24 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
         verify(entityActionService, Mockito.never()).logEntityAction(any(), eq(importedAsset.getId()), eq(importedAsset),
                 any(), eq(ActionType.UPDATED), isNull());
 
-
         EntityExportData<Asset> updatedAssetEntity = getAndClone(entitiesExportData, EntityType.ASSET);
         updatedAssetEntity.getEntity().setLabel("t" + updatedAssetEntity.getEntity().getLabel());
         Asset updatedAsset = importEntity(tenantAdmin2, updatedAssetEntity).getSavedEntity();
 
         verify(entityActionService).logEntityAction(any(), eq(importedAsset.getId()), eq(updatedAsset),
                 any(), eq(ActionType.UPDATED), isNull());
-        verify(tbClusterService).sendNotificationMsgToEdge(any(), any(), eq(importedAsset.getId()), any(), any(), eq(EdgeEventActionType.UPDATED), any());
+        verify(tbClusterService).sendNotificationMsgToEdge(any(), any(), eq(importedAsset.getId()), any(), any(), eq(EdgeEventActionType.UPDATED), any(), any(), any());
 
         DeviceProfile importedDeviceProfile = (DeviceProfile) importEntity(tenantAdmin2, getAndClone(entitiesExportData, EntityType.DEVICE_PROFILE)).getSavedEntity();
         verify(entityActionService).logEntityAction(any(), eq(importedDeviceProfile.getId()), eq(importedDeviceProfile),
                 any(), eq(ActionType.ADDED), isNull());
         verify(tbClusterService).onDeviceProfileChange(eq(importedDeviceProfile), any(), any());
-        verify(tbClusterService).sendNotificationMsgToEdge(any(), any(), eq(importedDeviceProfile.getId()), any(), any(), eq(EdgeEventActionType.ADDED), any());
+        verify(tbClusterService).sendNotificationMsgToEdge(any(), any(), eq(importedDeviceProfile.getId()), any(), any(), eq(EdgeEventActionType.ADDED), any(), any(), any());
         verify(otaPackageStateService).update(eq(importedDeviceProfile), eq(false), eq(false));
+
+        OtaPackage importedFirmware = (OtaPackage) importEntity(tenantAdmin2, getAndClone(entitiesExportData, EntityType.OTA_PACKAGE)).getSavedEntity();
+        verify(entityActionService).logEntityAction(any(), eq(importedFirmware.getId()), eq(importedFirmware),
+                any(), eq(ActionType.ADDED), isNull());
 
         Device importedDevice = (Device) importEntity(tenantAdmin2, getAndClone(entitiesExportData, EntityType.DEVICE)).getSavedEntity();
         verify(entityActionService).logEntityAction(any(), eq(importedDevice.getId()), eq(importedDevice),
@@ -639,18 +339,62 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
         verify(tbClusterService).onDeviceUpdated(eq(importedDevice), isNull());
         importEntity(tenantAdmin2, getAndClone(entitiesExportData, EntityType.DEVICE));
         verify(tbClusterService, Mockito.never()).onDeviceUpdated(eq(importedDevice), eq(importedDevice));
+        assertThat(importedDevice.getFirmwareId()).isEqualTo(importedFirmware.getId());
+
+        // calculated field of imported device:
+        List<CalculatedField> calculatedFields = calculatedFieldService.findCalculatedFieldsByEntityId(tenantId2, importedDevice.getId());
+        assertThat(calculatedFields.size()).isOne();
+        var importedCalculatedField = calculatedFields.get(0);
+        assertThat(importedCalculatedField.getName()).isEqualTo(calculatedField.getName());
+        verify(tbClusterService).onCalculatedFieldUpdated(eq(importedCalculatedField), isNull(), any());
 
         EntityExportData<Device> updatedDeviceEntity = getAndClone(entitiesExportData, EntityType.DEVICE);
         updatedDeviceEntity.getEntity().setLabel("t" + updatedDeviceEntity.getEntity().getLabel());
         Device updatedDevice = importEntity(tenantAdmin2, updatedDeviceEntity).getSavedEntity();
         verify(tbClusterService).onDeviceUpdated(eq(updatedDevice), eq(importedDevice));
+
+        // update calculated field:
+        DeviceExportData deviceExportData = (DeviceExportData) getAndClone(entitiesExportData, EntityType.DEVICE);
+        deviceExportData.setCalculatedFields(deviceExportData.getCalculatedFields().stream().peek(field -> field.setName("t_" + field.getName())).toList());
+        importEntity(tenantAdmin2, deviceExportData).getSavedEntity();
+
+        calculatedFields = calculatedFieldService.findCalculatedFieldsByEntityId(tenantId2, importedDevice.getId());
+        assertThat(calculatedFields.size()).isOne();
+        importedCalculatedField = calculatedFields.get(0);
+        assertThat(importedCalculatedField.getName()).startsWith("t_");
+
+        Converter importedConverter = (Converter) importEntity(tenantAdmin2, entitiesExportData.get(EntityType.CONVERTER)).getSavedEntity();
+        verify(tbClusterService).broadcastEntityStateChangeEvent(any(), eq(importedConverter.getId()), eq(ComponentLifecycleEvent.CREATED));
+        verify(entityActionService).logEntityAction(any(), eq(importedConverter.getId()), eq(importedConverter), any(), eq(ActionType.ADDED), isNull());
+
+        Integration importedIntegration = (Integration) importEntity(tenantAdmin2, entitiesExportData.get(EntityType.INTEGRATION), EntityImportSettings.builder()
+                .autoGenerateIntegrationKey(true)
+                .build()).getSavedEntity();
+        verify(tbClusterService).broadcastEntityStateChangeEvent(any(), eq(importedIntegration.getId()), eq(ComponentLifecycleEvent.CREATED));
+        verify(entityActionService).logEntityAction(any(), eq(importedIntegration.getId()), eq(importedIntegration), any(), eq(ActionType.ADDED), isNull());
+
+        Role importedRole = (Role) importEntity(tenantAdmin2, entitiesExportData.get(EntityType.ROLE)).getSavedEntity();
+        verify(userPermissionsService).onRoleUpdated(argThat(r -> r.getId().equals(importedRole.getId())));
+        verify(entityActionService).logEntityAction(any(), eq(importedRole.getId()), notNull(), any(), eq(ActionType.ADDED), isNull());
+
+        SchedulerEvent importedSchedulerEvent = (SchedulerEvent) importEntity(tenantAdmin2, entitiesExportData.get(EntityType.SCHEDULER_EVENT)).getSavedEntity();
+        verify(schedulerService).onSchedulerEventAdded(argThat(se -> se.getId().equals(importedSchedulerEvent.getId())));
+        verify(entityActionService).logEntityAction(any(), eq(importedSchedulerEvent.getId()), notNull(), any(), eq(ActionType.ADDED), isNull());
+
+        EntityExportData<SchedulerEvent> updatedSchedulerEventEntity = getAndClone(entitiesExportData, EntityType.SCHEDULER_EVENT);
+        updatedSchedulerEventEntity.getEntity().setName("t" + updatedSchedulerEventEntity.getEntity().getName());
+        SchedulerEvent updatedSchedulerEvent = importEntity(tenantAdmin2, updatedSchedulerEventEntity).getSavedEntity();
+        verify(schedulerService).onSchedulerEventUpdated(argThat(se -> se.getId().equals(updatedSchedulerEvent.getId())));
+
+        ReportTemplate importedReportTemplate = (ReportTemplate) importEntity(tenantAdmin2, entitiesExportData.get(EntityType.REPORT_TEMPLATE)).getSavedEntity();
+        verify(entityActionService).logEntityAction(any(), eq(importedReportTemplate.getId()), notNull(), any(), eq(ActionType.ADDED), isNull());
     }
 
     @Test
     public void testExternalIdsInExportData() throws Exception {
-        Customer customer = createCustomer(tenantId1, "Customer 1");
+        Customer customer = createCustomer(tenantId1, null, "Customer 1");
         AssetProfile assetProfile = createAssetProfile(tenantId1, null, null, "Asset profile 1");
-        Asset asset = createAsset(tenantId1, customer.getId(), assetProfile.getId(), "Asset 1");
+        Asset asset = createAsset(tenantId1, customer.getId(), assetProfile.getId(), null, "Asset 1");
         RuleChain ruleChain = createRuleChain(tenantId1, "Rule chain 1", asset.getId());
         Dashboard dashboard = createDashboard(tenantId1, customer.getId(), "Dashboard 1", asset.getId());
 
@@ -659,15 +403,25 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
         assetProfile = assetProfileService.saveAssetProfile(assetProfile);
 
         DeviceProfile deviceProfile = createDeviceProfile(tenantId1, ruleChain.getId(), dashboard.getId(), "Device profile 1");
-        Device device = createDevice(tenantId1, customer.getId(), deviceProfile.getId(), "Device 1");
+        OtaPackage firmware = createOtaPackage(tenantId1, deviceProfile.getId(), OtaPackageType.FIRMWARE);
+        Device device = createDevice(tenantId1, customer.getId(), deviceProfile.getId(), null, "Device 1", firmware.getId());
         EntityView entityView = createEntityView(tenantId1, customer.getId(), device.getId(), "Entity view 1");
+        Converter converter = createConverter(tenantId1, ConverterType.UPLINK, "Converter 1");
+        Integration integration = createIntegration(tenantId1, converter.getId(), IntegrationType.HTTP, "Integration 1");
+        SchedulerEvent schedulerEvent = createSchedulerEvent(tenantId1, device.getId(), "Scheduler Event 1", "report");
+        ReportTemplate reportTemplate = createReportTemplate(tenantId1, customer.getId(), "Weekly report", device.getId());
+
+        CalculatedField calculatedField = createCalculatedField(tenantId1, device.getId(), device.getId());
 
         Map<EntityId, EntityId> ids = new HashMap<>();
         for (EntityId entityId : List.of(customer.getId(), ruleChain.getId(), dashboard.getId(), assetProfile.getId(), asset.getId(),
-                deviceProfile.getId(), device.getId(), entityView.getId(), ruleChain.getId(), dashboard.getId())) {
+                deviceProfile.getId(), firmware.getId(), device.getId(), entityView.getId(), converter.getId(), integration.getId(),
+                ruleChain.getId(), dashboard.getId(), schedulerEvent.getId(), reportTemplate.getId())) {
             EntityExportData exportData = exportEntity(getSecurityUser(tenantAdmin1), entityId);
             EntityImportResult importResult = importEntity(getSecurityUser(tenantAdmin2), exportData, EntityImportSettings.builder()
                     .saveCredentials(false)
+                    .saveCalculatedFields(true)
+                    .autoGenerateIntegrationKey(true)
                     .build());
             ids.put(entityId, (EntityId) importResult.getSavedEntity().getId());
         }
@@ -686,9 +440,7 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
         assertThat(exportedRuleNodeConfig.getOriginatorId()).isEqualTo(asset.getId().toString());
 
         Dashboard exportedDashboard = (Dashboard) exportEntity(tenantAdmin2, (DashboardId) ids.get(dashboard.getId())).getEntity();
-        assertThat(exportedDashboard.getAssignedCustomers()).hasOnlyOneElementSatisfying(shortCustomerInfo -> {
-            assertThat(shortCustomerInfo.getCustomerId()).isEqualTo(customer.getId());
-        });
+        assertThat(exportedDashboard.getCustomerId()).isEqualTo(customer.getId());
         String exportedEntityAliasAssetId = exportedDashboard.getConfiguration().get("entityAliases").elements().next()
                 .get("filter").get("entityList").elements().next().asText();
         assertThat(exportedEntityAliasAssetId).isEqualTo(asset.getId().toString());
@@ -697,19 +449,432 @@ public class ExportImportServiceSqlTest extends BaseExportImportServiceTest {
         assertThat(exportedDeviceProfile.getDefaultRuleChainId()).isEqualTo(ruleChain.getId());
         assertThat(exportedDeviceProfile.getDefaultDashboardId()).isEqualTo(dashboard.getId());
 
-        Device exportedDevice = (Device) exportEntity(tenantAdmin2, (DeviceId) ids.get(device.getId())).getEntity();
+        OtaPackage exportedFirmware = (OtaPackage) exportEntity(tenantAdmin2, (OtaPackageId) ids.get(firmware.getId())).getEntity();
+        assertThat(exportedFirmware.getDeviceProfileId()).isEqualTo(exportedDeviceProfile.getId());
+        assertThat(exportedFirmware.getId()).isEqualTo(firmware.getId());
+
+        EntityExportData<Device> entityExportData = exportEntity(tenantAdmin2, (DeviceId) ids.get(device.getId()));
+        Device exportedDevice = entityExportData.getEntity();
         assertThat(exportedDevice.getCustomerId()).isEqualTo(customer.getId());
         assertThat(exportedDevice.getDeviceProfileId()).isEqualTo(deviceProfile.getId());
+        assertThat(exportedDevice.getFirmwareId()).isEqualTo(firmware.getId());
+
+        List<CalculatedField> calculatedFields = entityExportData.getCalculatedFields();
+        assertThat(calculatedFields.size()).isOne();
+        CalculatedField field = calculatedFields.get(0);
+        assertThat(field.getName()).isEqualTo(calculatedField.getName());
 
         EntityView exportedEntityView = (EntityView) exportEntity(tenantAdmin2, (EntityViewId) ids.get(entityView.getId())).getEntity();
         assertThat(exportedEntityView.getCustomerId()).isEqualTo(customer.getId());
         assertThat(exportedEntityView.getEntityId()).isEqualTo(device.getId());
+
+        Integration exportedIntegration = (Integration) exportEntity(tenantAdmin2, (IntegrationId) ids.get(integration.getId())).getEntity();
+        assertThat(exportedIntegration.getDefaultConverterId()).isEqualTo(converter.getId());
+
+        SchedulerEvent exportedSchedulerEvent = (SchedulerEvent) exportEntity(tenantAdmin2, (SchedulerEventId) ids.get(schedulerEvent.getId())).getEntity();
+        assertThat(exportedSchedulerEvent.getOriginatorId()).isEqualTo(schedulerEvent.getOriginatorId());
+
+        ReportTemplate exportedReportTemplate = (ReportTemplate) exportEntity(tenantAdmin2, (ReportTemplateId) ids.get(reportTemplate.getId())).getEntity();
+        assertThat(exportedReportTemplate.getCustomerId()).isEqualTo(reportTemplate.getCustomerId());
+        assertThat(((SingleEntityFilter)exportedReportTemplate.getConfiguration().getEntityAliases().get(0).getFilter()).getSingleEntity()).isEqualTo(device.getId());
 
         deviceProfile.setDefaultDashboardId(null);
         deviceProfileService.saveDeviceProfile(deviceProfile);
         DeviceProfile importedDeviceProfile = deviceProfileService.findDeviceProfileById(tenantId2, (DeviceProfileId) ids.get(deviceProfile.getId()));
         importedDeviceProfile.setDefaultDashboardId(null);
         deviceProfileService.saveDeviceProfile(importedDeviceProfile);
+    }
+
+    protected OtaPackage createOtaPackage(TenantId tenantId, DeviceProfileId deviceProfileId, OtaPackageType type) {
+        OtaPackage otaPackage = new OtaPackage();
+        otaPackage.setTenantId(tenantId);
+        otaPackage.setDeviceProfileId(deviceProfileId);
+        otaPackage.setType(type);
+        otaPackage.setTitle("My " + type);
+        otaPackage.setVersion("v1.0");
+        otaPackage.setFileName("filename.txt");
+        otaPackage.setContentType("text/plain");
+        otaPackage.setChecksumAlgorithm(ChecksumAlgorithm.SHA256);
+        otaPackage.setChecksum("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
+        otaPackage.setDataSize(1L);
+        otaPackage.setData(ByteBuffer.wrap(new byte[]{(int) 1}));
+        return otaPackageService.saveOtaPackage(otaPackage);
+    }
+
+    protected DeviceProfile createDeviceProfile(TenantId tenantId, RuleChainId defaultRuleChainId, DashboardId defaultDashboardId, String name) {
+        DeviceProfile deviceProfile = new DeviceProfile();
+        deviceProfile.setTenantId(tenantId);
+        deviceProfile.setName(name);
+        deviceProfile.setDescription("dscrptn");
+        deviceProfile.setType(DeviceProfileType.DEFAULT);
+        deviceProfile.setTransportType(DeviceTransportType.DEFAULT);
+        deviceProfile.setDefaultRuleChainId(defaultRuleChainId);
+        deviceProfile.setDefaultDashboardId(defaultDashboardId);
+        DeviceProfileData profileData = new DeviceProfileData();
+        profileData.setConfiguration(new DefaultDeviceProfileConfiguration());
+        profileData.setTransportConfiguration(new DefaultDeviceProfileTransportConfiguration());
+        deviceProfile.setProfileData(profileData);
+        return deviceProfileService.saveDeviceProfile(deviceProfile);
+    }
+
+    protected AssetProfile createAssetProfile(TenantId tenantId, RuleChainId defaultRuleChainId, DashboardId defaultDashboardId, String name) {
+        AssetProfile assetProfile = new AssetProfile();
+        assetProfile.setTenantId(tenantId);
+        assetProfile.setName(name);
+        assetProfile.setDescription("dscrptn");
+        assetProfile.setDefaultRuleChainId(defaultRuleChainId);
+        assetProfile.setDefaultDashboardId(defaultDashboardId);
+        return assetProfileService.saveAssetProfile(assetProfile);
+    }
+
+    protected Asset createAsset(TenantId tenantId, CustomerId customerId, AssetProfileId assetProfileId, EntityGroupId entityGroupId, String name) {
+        Asset asset = new Asset();
+        asset.setTenantId(tenantId);
+        asset.setCustomerId(customerId);
+        asset.setAssetProfileId(assetProfileId);
+        asset.setName(name);
+        asset.setLabel("lbl");
+        asset.setAdditionalInfo(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        asset = assetService.saveAsset(asset);
+        if (entityGroupId != null) {
+            entityGroupService.addEntityToEntityGroup(tenantId, entityGroupId, asset.getId());
+        }
+        return asset;
+    }
+
+    protected Device createDevice(TenantId tenantId, CustomerId customerId, DeviceProfileId deviceProfileId, EntityGroupId entityGroupId, String name, OtaPackageId firmwareId) {
+        Device device = new Device();
+        device.setTenantId(tenantId);
+        device.setCustomerId(customerId);
+        device.setName(name);
+        device.setLabel("lbl");
+        device.setDeviceProfileId(deviceProfileId);
+        device.setFirmwareId(firmwareId);
+        DeviceData deviceData = new DeviceData();
+        deviceData.setTransportConfiguration(new DefaultDeviceTransportConfiguration());
+        device.setDeviceData(deviceData);
+        device = deviceService.saveDevice(device);
+        if (entityGroupId != null) {
+            entityGroupService.addEntityToEntityGroup(tenantId, entityGroupId, device.getId());
+        }
+        return device;
+    }
+
+    protected Customer createCustomer(TenantId tenantId, EntityGroupId entityGroupId, String name) {
+        Customer customer = new Customer();
+        customer.setTenantId(tenantId);
+        if (entityGroupId != null) {
+            EntityGroup customerGroup = entityGroupService.findEntityGroupById(tenantId, entityGroupId);
+            if (customerGroup.getOwnerId() instanceof CustomerId) {
+                customer.setParentCustomerId((CustomerId) customerGroup.getOwnerId());
+            }
+        }
+        customer.setTitle(name);
+        customer.setCountry("ua");
+        customer.setAddress("abb");
+        customer.setEmail("ccc@aa.org");
+        customer.setAdditionalInfo(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        customer = customerService.saveCustomer(customer);
+        if (entityGroupId != null) {
+            entityGroupService.addEntityToEntityGroup(tenantId, entityGroupId, customer.getId());
+        }
+        return customer;
+    }
+
+    protected Dashboard createDashboard(TenantId tenantId, CustomerId customerId, String name) {
+        Dashboard dashboard = new Dashboard();
+        dashboard.setTenantId(tenantId);
+        dashboard.setCustomerId(customerId);
+        dashboard.setTitle(name);
+        dashboard.setConfiguration(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        dashboard.setImage("abvregewrg");
+        dashboard.setMobileHide(true);
+        dashboard = dashboardService.saveDashboard(dashboard);
+        return dashboard;
+    }
+
+    protected Dashboard createDashboard(TenantId tenantId, CustomerId customerId, String name, AssetId assetForEntityAlias) {
+        Dashboard dashboard = createDashboard(tenantId, customerId, name);
+        String entityAliases = "{\n" +
+                "\t\"23c4185d-1497-9457-30b2-6d91e69a5b2c\": {\n" +
+                "\t\t\"alias\": \"assets\",\n" +
+                "\t\t\"filter\": {\n" +
+                "\t\t\t\"entityList\": [\n" +
+                "\t\t\t\t\"" + assetForEntityAlias.getId().toString() + "\"\n" +
+                "\t\t\t],\n" +
+                "\t\t\t\"entityType\": \"ASSET\",\n" +
+                "\t\t\t\"resolveMultiple\": true,\n" +
+                "\t\t\t\"type\": \"entityList\"\n" +
+                "\t\t},\n" +
+                "\t\t\"id\": \"23c4185d-1497-9457-30b2-6d91e69a5b2c\"\n" +
+                "\t}\n" +
+                "}";
+        ObjectNode dashboardConfiguration = JacksonUtil.newObjectNode();
+        dashboardConfiguration.set("entityAliases", JacksonUtil.toJsonNode(entityAliases));
+        dashboardConfiguration.set("description", new TextNode("hallo"));
+        dashboard.setConfiguration(dashboardConfiguration);
+        return dashboardService.saveDashboard(dashboard);
+    }
+
+    protected RuleChain createRuleChain(TenantId tenantId, String name, EntityId originatorId) {
+        RuleChain ruleChain = new RuleChain();
+        ruleChain.setTenantId(tenantId);
+        ruleChain.setName(name);
+        ruleChain.setType(RuleChainType.CORE);
+        ruleChain.setDebugMode(true);
+        ruleChain.setConfiguration(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        ruleChain = ruleChainService.saveRuleChain(ruleChain);
+
+        RuleChainMetaData metaData = new RuleChainMetaData();
+        metaData.setRuleChainId(ruleChain.getId());
+
+        RuleNode ruleNode1 = new RuleNode();
+        ruleNode1.setName("Generator 1");
+        ruleNode1.setType(TbMsgGeneratorNode.class.getName());
+        TbMsgGeneratorNodeConfiguration configuration1 = new TbMsgGeneratorNodeConfiguration();
+        configuration1.setOriginatorType(originatorId.getEntityType());
+        configuration1.setOriginatorId(originatorId.getId().toString());
+        ruleNode1.setConfiguration(JacksonUtil.valueToTree(configuration1));
+
+        RuleNode ruleNode2 = new RuleNode();
+        ruleNode2.setName("Simple Rule Node 2");
+        ruleNode2.setType(org.thingsboard.rule.engine.metadata.TbGetAttributesNode.class.getName());
+        ruleNode2.setConfigurationVersion(TbGetAttributesNode.class.getAnnotation(org.thingsboard.rule.engine.api.RuleNode.class).version());
+        TbGetAttributesNodeConfiguration configuration2 = new TbGetAttributesNodeConfiguration();
+        configuration2.setServerAttributeNames(Collections.singletonList("serverAttributeKey2"));
+        ruleNode2.setConfiguration(JacksonUtil.valueToTree(configuration2));
+
+        metaData.setNodes(Arrays.asList(ruleNode1, ruleNode2));
+        metaData.setFirstNodeIndex(0);
+        metaData.addConnectionInfo(0, 1, TbNodeConnectionType.SUCCESS);
+        ruleChainService.saveRuleChainMetaData(tenantId, metaData, Function.identity());
+
+        return ruleChainService.findRuleChainById(tenantId, ruleChain.getId());
+    }
+
+    protected RuleChain createRuleChain(TenantId tenantId, String name) {
+        RuleChain ruleChain = new RuleChain();
+        ruleChain.setTenantId(tenantId);
+        ruleChain.setName(name);
+        ruleChain.setType(RuleChainType.CORE);
+        ruleChain.setDebugMode(true);
+        ruleChain.setConfiguration(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        ruleChain = ruleChainService.saveRuleChain(ruleChain);
+
+        RuleChainMetaData metaData = new RuleChainMetaData();
+        metaData.setRuleChainId(ruleChain.getId());
+
+        RuleNode ruleNode1 = new RuleNode();
+        ruleNode1.setName("Simple Rule Node 1");
+        ruleNode1.setType(org.thingsboard.rule.engine.metadata.TbGetAttributesNode.class.getName());
+        ruleNode1.setConfigurationVersion(TbGetAttributesNode.class.getAnnotation(org.thingsboard.rule.engine.api.RuleNode.class).version());
+        TbGetAttributesNodeConfiguration configuration1 = new TbGetAttributesNodeConfiguration();
+        configuration1.setServerAttributeNames(Collections.singletonList("serverAttributeKey1"));
+        ruleNode1.setConfiguration(JacksonUtil.valueToTree(configuration1));
+
+        RuleNode ruleNode2 = new RuleNode();
+        ruleNode2.setName("Simple Rule Node 2");
+        ruleNode2.setType(org.thingsboard.rule.engine.metadata.TbGetAttributesNode.class.getName());
+        ruleNode2.setConfigurationVersion(TbGetAttributesNode.class.getAnnotation(org.thingsboard.rule.engine.api.RuleNode.class).version());
+        TbGetAttributesNodeConfiguration configuration2 = new TbGetAttributesNodeConfiguration();
+        configuration2.setServerAttributeNames(Collections.singletonList("serverAttributeKey2"));
+        ruleNode2.setConfiguration(JacksonUtil.valueToTree(configuration2));
+
+        metaData.setNodes(Arrays.asList(ruleNode1, ruleNode2));
+        metaData.setFirstNodeIndex(0);
+        metaData.addConnectionInfo(0, 1, TbNodeConnectionType.SUCCESS);
+        ruleChainService.saveRuleChainMetaData(tenantId, metaData, Function.identity());
+
+        return ruleChainService.findRuleChainById(tenantId, ruleChain.getId());
+    }
+
+    protected EntityView createEntityView(TenantId tenantId, CustomerId customerId, EntityId entityId, String name) {
+        EntityView entityView = new EntityView();
+        entityView.setTenantId(tenantId);
+        entityView.setEntityId(entityId);
+        entityView.setCustomerId(customerId);
+        entityView.setName(name);
+        entityView.setType("A");
+        return entityViewService.saveEntityView(entityView);
+    }
+
+    protected EntityRelation createRelation(EntityId from, EntityId to) {
+        EntityRelation relation = new EntityRelation();
+        relation.setFrom(from);
+        relation.setTo(to);
+        relation.setType(EntityRelation.MANAGES_TYPE);
+        relation.setAdditionalInfo(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        relation.setTypeGroup(RelationTypeGroup.COMMON);
+        relationService.saveRelation(TenantId.SYS_TENANT_ID, relation);
+        return relation;
+    }
+
+    protected EntityGroup createEntityGroup(EntityId ownerId, EntityType groupType, String name) {
+        EntityGroup entityGroup = new EntityGroup();
+        entityGroup.setOwnerId(ownerId);
+        entityGroup.setType(groupType);
+        entityGroup.setName(name);
+        entityGroup.setAdditionalInfo(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        return entityGroupService.saveEntityGroup(TenantId.SYS_TENANT_ID, ownerId, entityGroup);
+    }
+
+    protected Converter createConverter(TenantId tenantId, ConverterType type, String name) {
+        Converter converter = new Converter();
+        converter.setTenantId(tenantId);
+        converter.setType(type);
+        converter.setName(name);
+        converter.setConfiguration(JacksonUtil.newObjectNode()
+                .<ObjectNode>set("encoder", new TextNode("b"))
+                .set("decoder", new TextNode("c")));
+        converter.setDebugSettings(DebugSettings.all());
+        converter.setAdditionalInfo(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        return converterService.saveConverter(converter);
+    }
+
+    protected Integration createIntegration(TenantId tenantId, ConverterId converterId, IntegrationType type, String name) {
+        Integration integration = new Integration();
+        integration.setTenantId(tenantId);
+        integration.setType(type);
+        integration.setName(name);
+        integration.setDefaultConverterId(converterId);
+        integration.setRoutingKey("abc");
+        integration.setSecret("scrt");
+        integration.setEnabled(false);
+        integration.setConfiguration(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        integration.setAdditionalInfo(JacksonUtil.newObjectNode().set("a", new TextNode("b")));
+        return integrationService.saveIntegration(integration);
+    }
+
+    protected Role createGenericRole(TenantId tenantId, CustomerId customerId, String name, Map<Resource, List<Operation>> permissions) {
+        return createRole(tenantId, customerId, name, RoleType.GENERIC, permissions);
+    }
+
+    private Role createRole(TenantId tenantId, CustomerId customerId, String name, RoleType roleType, Object permissions) {
+        Role role = new Role();
+        role.setTenantId(tenantId);
+        role.setCustomerId(customerId);
+        role.setName(name);
+        role.setType(roleType);
+        role.setPermissions(JacksonUtil.valueToTree(permissions));
+        return roleService.saveRole(tenantId, role);
+    }
+
+    protected GroupPermission createGroupPermission(TenantId tenantId, EntityGroupId userGroupId, RoleId genericRoleId) {
+        return createGroupPermission(tenantId, userGroupId, genericRoleId, null, null);
+    }
+
+    protected GroupPermission createGroupPermission(TenantId tenantId, EntityGroupId userGroupId, RoleId roleId, EntityGroupId entityGroupId, EntityType entityGroupType) {
+        GroupPermission groupPermission = new GroupPermission();
+        groupPermission.setTenantId(tenantId);
+        groupPermission.setUserGroupId(userGroupId);
+        groupPermission.setRoleId(roleId);
+        groupPermission.setEntityGroupId(entityGroupId);
+        groupPermission.setEntityGroupType(entityGroupType);
+        return groupPermissionService.saveGroupPermission(tenantId, groupPermission);
+    }
+
+    private CalculatedField createCalculatedField(TenantId tenantId, EntityId entityId, EntityId referencedEntityId) {
+        CalculatedField calculatedField = new CalculatedField();
+        calculatedField.setTenantId(tenantId);
+        calculatedField.setEntityId(entityId);
+        calculatedField.setType(CalculatedFieldType.SIMPLE);
+        calculatedField.setName("Test Calculated Field");
+        calculatedField.setConfigurationVersion(1);
+        calculatedField.setConfiguration(getCalculatedFieldConfig(referencedEntityId));
+        calculatedField.setVersion(1L);
+        return calculatedFieldService.save(calculatedField);
+    }
+
+    private CalculatedFieldConfiguration getCalculatedFieldConfig(EntityId referencedEntityId) {
+        SimpleCalculatedFieldConfiguration config = new SimpleCalculatedFieldConfiguration();
+
+        Argument argument = new Argument();
+        argument.setRefEntityId(referencedEntityId);
+        ReferencedEntityKey refEntityKey = new ReferencedEntityKey("temperature", ArgumentType.TS_LATEST, null);
+        argument.setRefEntityKey(refEntityKey);
+
+        config.setArguments(Map.of("T", argument));
+
+        config.setExpression("T - (100 - H) / 5");
+
+        TimeSeriesOutput output = new TimeSeriesOutput();
+        output.setName("output");
+
+        config.setOutput(output);
+
+        return config;
+    }
+
+    private SchedulerEvent createSchedulerEvent(TenantId tenantId, EntityId originatorId, String name, String type) {
+        SchedulerEvent schedulerEvent = new SchedulerEvent();
+        schedulerEvent.setTenantId(tenantId);
+        schedulerEvent.setOwnerId(tenantId);
+        schedulerEvent.setOriginatorId(originatorId);
+        schedulerEvent.setConfiguration(JacksonUtil.newObjectNode());
+        schedulerEvent.setName(name);
+        schedulerEvent.setType(type);
+        ObjectNode schedule = JacksonUtil.newObjectNode();
+        schedule.put("startTime", Long.MAX_VALUE);
+        schedule.put("timezone", "UTC");
+        schedulerEvent.setSchedule(schedule);
+        return schedulerEventService.saveSchedulerEvent(schedulerEvent);
+    }
+
+    private ReportTemplate createReportTemplate(TenantId tenantId, CustomerId customerId, String name, EntityId entityId) {
+        ReportTemplate reportTemplate = new ReportTemplate();
+        reportTemplate.setTenantId(tenantId);
+        reportTemplate.setCustomerId(customerId);
+        reportTemplate.setFormat(TbReportFormat.CSV);
+        CsvReportTemplateConfig configuration = new CsvReportTemplateConfig();
+        configuration.setComponents(Collections.emptyList());
+        SingleEntityFilter filter = new SingleEntityFilter();
+        filter.setSingleEntity(AliasEntityId.fromEntityId(entityId));
+        configuration.setEntityAliases(List.of(new EntityAlias(UUID.randomUUID().toString(), "by device id", filter)));
+        reportTemplate.setConfiguration(configuration);
+        reportTemplate.setType(ReportTemplateType.REPORT);
+        reportTemplate.setName(name);
+        return reportTemplateService.saveReportTemplate(reportTemplate);
+    }
+
+    protected <E extends ExportableEntity<I>, I extends EntityId> EntityExportData<E> exportEntity(User user, I entityId) throws Exception {
+        return exportEntity(user, entityId, EntityExportSettings.builder()
+                .exportCredentials(true)
+                .exportCalculatedFields(true)
+                .build());
+    }
+
+    protected <E extends ExportableEntity<I>, I extends EntityId> EntityExportData<E> exportEntity(User user, I entityId, EntityExportSettings exportSettings) throws Exception {
+        return exportImportService.exportEntity(new SimpleEntitiesExportCtx(getSecurityUser(user), null, null, exportSettings), entityId);
+    }
+
+    protected <E extends ExportableEntity<I>, I extends EntityId> EntityImportResult<E> importEntity(User user, EntityExportData<E> exportData) throws Exception {
+        return importEntity(user, exportData, EntityImportSettings.builder()
+                .saveCredentials(true)
+                .saveCalculatedFields(true)
+                .autoGenerateIntegrationKey(true)
+                .build());
+    }
+
+    protected <E extends ExportableEntity<I>, I extends EntityId> EntityImportResult<E> importEntity(User user, EntityExportData<E> exportData, EntityImportSettings importSettings) throws Exception {
+        EntitiesImportCtx ctx = new EntitiesImportCtx(UUID.randomUUID(), getSecurityUser(user), null, importSettings);
+        ctx.setFinalImportAttempt(true);
+        exportData = JacksonUtil.clone(exportData);
+        EntityImportResult<E> importResult = exportImportService.importEntity(ctx, exportData);
+        exportImportService.saveReferencesAndRelations(ctx);
+        for (ThrowingRunnable throwingRunnable : ctx.getEventCallbacks()) {
+            throwingRunnable.run();
+        }
+        return importResult;
+    }
+
+    @SuppressWarnings("rawTypes")
+    private static EntityExportData getAndClone(Map<EntityType, EntityExportData> map, EntityType entityType) {
+        return JacksonUtil.clone(map.get(entityType));
+    }
+
+    protected SecurityUser getSecurityUser(User user) {
+        return new SecurityUser(user, true, new UserPrincipal(UserPrincipal.Type.USER_NAME, user.getEmail()),
+                new MergedUserPermissions(Map.of(Resource.ALL, Set.of(Operation.ALL)), Collections.emptyMap()));
     }
 
 }

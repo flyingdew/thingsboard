@@ -1,20 +1,7 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
-import { Component, EventEmitter, Input, OnInit, Output, ViewEncapsulation } from '@angular/core';
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+import { Component, DestroyRef, EventEmitter, Input, OnInit, Output, ViewEncapsulation } from '@angular/core';
 import { PageComponent } from '@shared/components/page.component';
 import { TbPopoverComponent } from '@shared/components/popover.component';
 import { UntypedFormBuilder, UntypedFormGroup, Validators } from '@angular/forms';
@@ -33,13 +20,15 @@ import { AttributeScope, DataKeyType, telemetryTypeTranslationsShort } from '@sh
 import { IAliasController } from '@core/api/widget-api.models';
 import { WidgetService } from '@core/http/widget.service';
 import { ValueType } from '@shared/models/constants';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
-  selector: 'tb-set-value-action-settings-panel',
-  templateUrl: './set-value-action-settings-panel.component.html',
-  providers: [],
-  styleUrls: ['./action-settings-panel.component.scss'],
-  encapsulation: ViewEncapsulation.None
+    selector: 'tb-set-value-action-settings-panel',
+    templateUrl: './set-value-action-settings-panel.component.html',
+    providers: [],
+    styleUrls: ['./action-settings-panel.component.scss'],
+    encapsulation: ViewEncapsulation.None,
+    standalone: false
 })
 export class SetValueActionSettingsPanelComponent extends PageComponent implements OnInit {
 
@@ -89,7 +78,8 @@ export class SetValueActionSettingsPanelComponent extends PageComponent implemen
 
   constructor(private fb: UntypedFormBuilder,
               private widgetService: WidgetService,
-              protected store: Store<AppState>) {
+              protected store: Store<AppState>,
+              private destroyRef: DestroyRef) {
     super(store);
   }
 
@@ -100,10 +90,10 @@ export class SetValueActionSettingsPanelComponent extends PageComponent implemen
         action: [this.setValueSettings?.action, []],
         executeRpc: this.fb.group({
           method: [this.setValueSettings?.executeRpc?.method, [Validators.required]],
-          requestTimeout: [this.setValueSettings?.executeRpc?.requestTimeout, [Validators.required, Validators.min(5000)]],
+          requestTimeout: [this.setValueSettings?.executeRpc?.requestTimeout ?? 5000, [Validators.required, Validators.min(5000)]],
           requestPersistent: [this.setValueSettings?.executeRpc?.requestPersistent, []],
           persistentPollingInterval:
-            [this.setValueSettings?.executeRpc?.persistentPollingInterval, [Validators.required, Validators.min(1000)]]
+            [this.setValueSettings?.executeRpc?.persistentPollingInterval ?? 1000, [Validators.required, Validators.min(1000)]]
         }),
         setAttribute: this.fb.group({
           scope: [this.setValueSettings?.setAttribute?.scope, []],
@@ -122,7 +112,10 @@ export class SetValueActionSettingsPanelComponent extends PageComponent implemen
 
     merge(this.setValueSettingsFormGroup.get('action').valueChanges,
       this.setValueSettingsFormGroup.get('valueToData').get('type').valueChanges,
-      this.setValueSettingsFormGroup.get('executeRpc').get('requestPersistent').valueChanges).subscribe(() => {
+      this.setValueSettingsFormGroup.get('executeRpc').get('requestPersistent').valueChanges
+    ).pipe(
+      takeUntilDestroyed(this.destroyRef)
+    ).subscribe(() => {
       this.updateValidators();
     });
     this.updateValidators();

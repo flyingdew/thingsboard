@@ -1,19 +1,5 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import { RouterModule, Routes } from '@angular/router';
 import { Authority } from '@shared/models/authority.enum';
 import { NgModule } from '@angular/core';
@@ -25,6 +11,7 @@ import { RecipientTableConfigResolver } from '@home/pages/notification/recipient
 import { TemplateTableConfigResolver } from '@home/pages/notification/template/template-table-config.resolver';
 import { RuleTableConfigResolver } from '@home/pages/notification/rule/rule-table-config.resolver';
 import { SendNotificationButtonComponent } from '@home/components/notification/send-notification-button.component';
+import { MenuId } from '@core/services/menu.models';
 
 const routes: Routes = [
   {
@@ -33,8 +20,7 @@ const routes: Routes = [
     data: {
       auth: [Authority.TENANT_ADMIN, Authority.CUSTOMER_USER, Authority.SYS_ADMIN],
       breadcrumb: {
-        label: 'notification.notification-center',
-        icon: 'mdi:message-badge'
+        menuId: MenuId.notifications_center
       },
       routerTabsHeaderComponent: SendNotificationButtonComponent
     },
@@ -54,8 +40,7 @@ const routes: Routes = [
           auth: [Authority.TENANT_ADMIN, Authority.CUSTOMER_USER, Authority.SYS_ADMIN],
           title: 'notification.inbox',
           breadcrumb: {
-            label: 'notification.inbox',
-            icon: 'inbox'
+            menuId: MenuId.notification_inbox
           }
         },
         resolve: {
@@ -69,8 +54,7 @@ const routes: Routes = [
           auth: [Authority.TENANT_ADMIN, Authority.SYS_ADMIN],
           title: 'notification.sent',
           breadcrumb: {
-            label: 'notification.sent',
-            icon: 'outbox'
+            menuId: MenuId.notification_sent
           }
         },
         resolve: {
@@ -84,8 +68,7 @@ const routes: Routes = [
           auth: [Authority.TENANT_ADMIN, Authority.SYS_ADMIN],
           title: 'notification.templates',
           breadcrumb: {
-            label: 'notification.templates',
-            icon: 'mdi:message-draw'
+            menuId: MenuId.notification_templates
           }
         },
         resolve: {
@@ -99,8 +82,7 @@ const routes: Routes = [
           auth: [Authority.TENANT_ADMIN, Authority.SYS_ADMIN],
           title: 'notification.recipients',
           breadcrumb: {
-            label: 'notification.recipients',
-            icon: 'contacts'
+            menuId: MenuId.notification_recipients
           },
         },
         resolve: {
@@ -114,8 +96,7 @@ const routes: Routes = [
           auth: [Authority.TENANT_ADMIN, Authority.SYS_ADMIN],
           title: 'notification.rules',
           breadcrumb: {
-            label: 'notification.rules',
-            icon: 'mdi:message-cog'
+            menuId: MenuId.notification_rules
           }
         },
         resolve: {

@@ -1,23 +1,13 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.controller.plugin;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.RemovalCause;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.websocket.RemoteEndpoint;
 import jakarta.websocket.SendHandler;
 import jakarta.websocket.SendResult;
@@ -30,6 +20,7 @@ import org.springframework.beans.factory.BeanCreationNotAllowedException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.PongMessage;
@@ -38,18 +29,20 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.adapter.NativeWebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.server.cache.limits.RateLimitService;
 import org.thingsboard.server.common.data.TenantProfile;
 import org.thingsboard.server.common.data.exception.ThingsboardErrorCode;
 import org.thingsboard.server.common.data.id.CustomerId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.UserId;
 import org.thingsboard.server.common.data.limit.LimitedApi;
+import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.common.data.tenant.profile.DefaultTenantProfileConfiguration;
 import org.thingsboard.server.config.WebSocketConfiguration;
 import org.thingsboard.server.dao.tenant.TbTenantProfileCache;
-import org.thingsboard.server.cache.limits.RateLimitService;
 import org.thingsboard.server.queue.util.TbCoreComponent;
 import org.thingsboard.server.service.security.auth.jwt.JwtAuthenticationProvider;
+import org.thingsboard.server.service.security.auth.pat.ApiKeyAuthenticationProvider;
 import org.thingsboard.server.service.security.exception.JwtExpiredTokenException;
 import org.thingsboard.server.service.security.model.SecurityUser;
 import org.thingsboard.server.service.security.model.UserPrincipal;
@@ -64,9 +57,9 @@ import org.thingsboard.server.service.ws.WsCommandsWrapper;
 import org.thingsboard.server.service.ws.notification.cmd.NotificationCmdsWrapper;
 import org.thingsboard.server.service.ws.telemetry.cmd.TelemetryCmdsWrapper;
 
-import javax.annotation.PostConstruct;
 import java.io.IOException;
 import java.security.InvalidParameterException;
+import java.util.EnumSet;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
@@ -88,6 +81,8 @@ import static org.thingsboard.server.service.ws.DefaultWebSocketService.NUMBER_O
 @RequiredArgsConstructor
 public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocketMsgEndpoint {
 
+    private static final Set<Authority> USER_AUTHORITIES = EnumSet.of(Authority.SYS_ADMIN, Authority.TENANT_ADMIN, Authority.CUSTOMER_USER);
+
     private final ConcurrentMap<String, SessionMetaData> internalSessionMap = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> externalSessionMap = new ConcurrentHashMap<>();
 
@@ -99,6 +94,8 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
     private RateLimitService rateLimitService;
     @Autowired
     private JwtAuthenticationProvider authenticationProvider;
+    @Autowired
+    private ApiKeyAuthenticationProvider apiKeyAuthenticationProvider;
 
     @Value("${server.ws.send_timeout:5000}")
     private long sendTimeout;
@@ -114,7 +111,7 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
     private final ConcurrentMap<TenantId, Set<String>> tenantSessionsMap = new ConcurrentHashMap<>();
     private final ConcurrentMap<CustomerId, Set<String>> customerSessionsMap = new ConcurrentHashMap<>();
     private final ConcurrentMap<UserId, Set<String>> regularUserSessionsMap = new ConcurrentHashMap<>();
-    private final ConcurrentMap<UserId, Set<String>> publicUserSessionsMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<TenantId, Set<String>> publicUserSessionsMap = new ConcurrentHashMap<>();
 
     private Cache<String, SessionMetaData> pendingSessions;
 
@@ -132,6 +129,11 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
                     }
                 })
                 .build();
+    }
+
+    @PreDestroy
+    private void stop() {
+        internalSessionMap.clear();
     }
 
     @Override
@@ -188,7 +190,11 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
             log.trace("{} Authenticating session", sessionRef);
             SecurityUser securityCtx;
             try {
-                securityCtx = authenticationProvider.authenticate(authCmd.getToken());
+                if (StringUtils.isNotEmpty(authCmd.getApiKey())) {
+                    securityCtx = apiKeyAuthenticationProvider.authenticate(authCmd.getApiKey());
+                } else {
+                    securityCtx = authenticate(authCmd.getToken());
+                }
             } catch (Exception e) {
                 close(sessionRef, CloseStatus.BAD_DATA.withReason(e.getMessage()));
                 return;
@@ -322,9 +328,12 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
         }
 
         SecurityUser securityCtx = null;
-        String token = StringUtils.substringAfter(session.getUri().getQuery(), "token=");
-        if (StringUtils.isNotEmpty(token)) {
-            securityCtx = authenticationProvider.authenticate(token);
+        String query = session.getUri().getQuery();
+        if (query != null) {
+            String token = extractQueryParam(query, "token");
+            if (StringUtils.isNotEmpty(token)) {
+                securityCtx = authenticate(token);
+            }
         }
         return WebSocketSessionRef.builder()
                 .sessionId(UUID.randomUUID().toString())
@@ -333,6 +342,23 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
                 .remoteAddress(session.getRemoteAddress())
                 .sessionType(sessionType)
                 .build();
+    }
+
+    private String extractQueryParam(String query, String paramName) {
+        for (String param : query.split("&")) {
+            if (param.startsWith(paramName + "=")) {
+                return param.substring(paramName.length() + 1);
+            }
+        }
+        return null;
+    }
+
+    private SecurityUser authenticate(String token) {
+        SecurityUser securityUser = authenticationProvider.authenticate(token);
+        if (!USER_AUTHORITIES.contains(securityUser.getAuthority())) {
+            throw new BadCredentialsException("Token is invalid");
+        }
+        return securityUser;
     }
 
     private SessionMetaData getSessionMd(String internalSessionId) {
@@ -476,6 +502,7 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
                 }
             }
         }
+
     }
 
     @Override
@@ -539,6 +566,18 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
         }
     }
 
+    @Override
+    public boolean isOpen(String externalId) {
+        String internalId = externalSessionMap.get(externalId);
+        if (internalId != null) {
+            SessionMetaData sessionMd = getSessionMd(internalId);
+            if (sessionMd != null) {
+                return sessionMd.session.isOpen();
+            }
+        }
+        return false;
+    }
+
     private boolean checkLimits(WebSocketSession session, WebSocketSessionRef sessionRef) throws IOException {
         var tenantProfileConfiguration = getTenantProfileConfiguration(sessionRef);
         if (tenantProfileConfiguration == null) {
@@ -593,7 +632,7 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
             }
             if (tenantProfileConfiguration.getMaxWsSessionsPerPublicUser() > 0
                     && UserPrincipal.Type.PUBLIC_ID.equals(sessionRef.getSecurityCtx().getUserPrincipal().getType())) {
-                Set<String> publicUserSessions = publicUserSessionsMap.computeIfAbsent(sessionRef.getSecurityCtx().getId(), id -> ConcurrentHashMap.newKeySet());
+                Set<String> publicUserSessions = publicUserSessionsMap.computeIfAbsent(sessionRef.getSecurityCtx().getTenantId(), id -> ConcurrentHashMap.newKeySet());
                 synchronized (publicUserSessions) {
                     limitAllowed = publicUserSessions.size() < tenantProfileConfiguration.getMaxWsSessionsPerPublicUser();
                     if (limitAllowed) {
@@ -637,7 +676,7 @@ public class TbWebSocketHandler extends TextWebSocketHandler implements WebSocke
                 }
             }
             if (tenantProfileConfiguration.getMaxWsSessionsPerPublicUser() > 0 && UserPrincipal.Type.PUBLIC_ID.equals(sessionRef.getSecurityCtx().getUserPrincipal().getType())) {
-                Set<String> publicUserSessions = publicUserSessionsMap.computeIfAbsent(sessionRef.getSecurityCtx().getId(), id -> ConcurrentHashMap.newKeySet());
+                Set<String> publicUserSessions = publicUserSessionsMap.computeIfAbsent(sessionRef.getSecurityCtx().getTenantId(), id -> ConcurrentHashMap.newKeySet());
                 synchronized (publicUserSessions) {
                     publicUserSessions.remove(sessionId);
                 }

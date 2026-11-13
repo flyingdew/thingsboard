@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.service;
 
 import org.junit.After;
@@ -24,11 +12,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.thingsboard.server.common.data.StringUtils;
 import org.thingsboard.server.common.data.Tenant;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.page.PageData;
+import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.queue.QueueStats;
-import org.thingsboard.server.dao.exception.DataValidationException;
 import org.thingsboard.server.dao.queue.QueueStatsService;
-
-import java.util.List;
+import org.thingsboard.server.exception.DataValidationException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,9 +68,9 @@ public class QueueStatsServiceTest extends AbstractServiceTest {
         QueueStats retrievedQueueStatsById2 = queueStatsService.findQueueStatsById(tenantId, savedQueueStats2.getId());
         Assert.assertEquals(retrievedQueueStatsById2.getQueueName(), secondQueueName);
 
-        List<QueueStats> queueStatsList = queueStatsService.findByTenantId(tenantId);
-        Assert.assertEquals(2, queueStatsList.size());
-        assertThat(queueStatsList).containsOnly(retrievedQueueStatsById, retrievedQueueStatsById2);
+        PageData<QueueStats> queueStatsList = queueStatsService.findByTenantId(tenantId, new PageLink(10));
+        Assert.assertEquals(2, queueStatsList.getData().size());
+        assertThat(queueStatsList.getData()).containsOnly(retrievedQueueStatsById, retrievedQueueStatsById2);
 
         queueStatsService.deleteByTenantId(tenantId);
         QueueStats retrievedQueueStatsAfterDelete = queueStatsService.findQueueStatsById(tenantId, savedQueueStats.getId());

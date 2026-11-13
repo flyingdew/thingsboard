@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.common.adaptor;
 
 import com.google.gson.JsonParser;
@@ -22,8 +10,10 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
+import org.thingsboard.server.gen.transport.TransportProtos.KeyValueProto;
+import org.thingsboard.server.gen.transport.TransportProtos.KeyValueType;
 
-import java.util.ArrayList;
+import java.util.Set;
 
 @Isolated("JsonConverter static settings being modified")
 public class JsonConverterTest {
@@ -53,7 +43,7 @@ public class JsonConverterTest {
 
     @Test
     public void testParseAttributesBigDecimalAsLong() {
-        var result = new ArrayList<>(JsonConverter.convertToAttributes(JsonParser.parseString("{\"meterReadingDelta\": 1E1}")));
+        var result = JsonConverter.convertToAttributes(JsonParser.parseString("{\"meterReadingDelta\": 1E1}"));
         Assertions.assertEquals(10L, result.get(0).getLongValue().get().longValue());
     }
 
@@ -108,4 +98,41 @@ public class JsonConverterTest {
             JsonConverter.convertToTelemetry(JsonParser.parseString("{\"meterReadingDelta\": 9.9701010061400066E19}"), 0L);
         });
     }
+
+    @Test
+    public void testParseAttributesProtoWithNoCastKeys() {
+        var json = JsonParser.parseString("{\"devAddr\": \"01020304\", \"fCnt\": \"42\", \"rssi\": -110}");
+        var kvList = JsonConverter.convertToAttributesProto(json, Set.of("devAddr")).getKvList();
+        assertKv(kvList.get(0), KeyValueType.STRING_V, "01020304");
+        assertKv(kvList.get(1), KeyValueType.LONG_V, "42");
+        assertKv(kvList.get(2), KeyValueType.LONG_V, "-110");
+    }
+
+    @Test
+    public void testParseTelemetryProtoWithNoCastKeys() {
+        var json = JsonParser.parseString("{\"ts\": 1000, \"values\": {\"eui\": \"1000000000000001\", \"fCnt\": \"42\", \"snr\": 9.5}}");
+        var tsKvList = JsonConverter.convertToTelemetryProto(json, Set.of("eui")).getTsKvList(0);
+        Assertions.assertEquals(1000L, tsKvList.getTs());
+        assertKv(tsKvList.getKv(0), KeyValueType.STRING_V, "1000000000000001");
+        assertKv(tsKvList.getKv(1), KeyValueType.LONG_V, "42");
+        assertKv(tsKvList.getKv(2), KeyValueType.DOUBLE_V, "9.5");
+    }
+
+    @Test
+    public void testParseAttributesProtoCastsNumericStrings() {
+        var kvList = JsonConverter.convertToAttributesProto(JsonParser.parseString("{\"devAddr\": \"01020304\"}")).getKvList();
+        assertKv(kvList.get(0), KeyValueType.LONG_V, "1020304");
+    }
+
+    private static void assertKv(KeyValueProto kv, KeyValueType type, String value) {
+        Assertions.assertEquals(type, kv.getType());
+        String actual = switch (type) {
+            case STRING_V -> kv.getStringV();
+            case LONG_V -> String.valueOf(kv.getLongV());
+            case DOUBLE_V -> String.valueOf(kv.getDoubleV());
+            default -> throw new IllegalArgumentException("Unexpected type: " + type);
+        };
+        Assertions.assertEquals(value, actual);
+    }
+
 }

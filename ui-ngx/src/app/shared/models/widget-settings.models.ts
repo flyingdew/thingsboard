@@ -1,20 +1,16 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
-import { isDefinedAndNotNull, isNumber, isNumeric, isUndefinedOrNull, mergeDeep, parseFunction } from '@core/utils';
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+import {
+  deepClone,
+  isDefinedAndNotNull,
+  isNotEmptyStr,
+  isNumber,
+  isNumeric,
+  isUndefinedOrNull,
+  mergeDeep,
+  parseFunction
+} from '@core/utils';
 import {
   DataEntry,
   DataKey,
@@ -22,28 +18,49 @@ import {
   DatasourceData,
   DatasourceType,
   TargetDevice,
-  TargetDeviceType
+  TargetDeviceType,
+  widgetType
 } from '@shared/models/widget.models';
-import { Injector } from '@angular/core';
+import { EventEmitter, Injector, NgZone } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { DateAgoPipe } from '@shared/pipe/date-ago.pipe';
+import { DateAgoPipe, nextAgoChangeDelay } from '@shared/pipe/date-ago.pipe';
 import { TranslateService } from '@ngx-translate/core';
 import { AlarmFilterConfig } from '@shared/models/query/query.models';
 import { AlarmSearchStatus } from '@shared/models/alarm.models';
-import { Observable, of } from 'rxjs';
+import { BehaviorSubject, EMPTY, Observable, of, Subscription, timer } from 'rxjs';
 import { ImagePipe } from '@shared/pipe/image.pipe';
-import { map } from 'rxjs/operators';
+import { distinctUntilChanged, filter, map, share, switchMap } from 'rxjs/operators';
 import { DomSanitizer } from '@angular/platform-browser';
-import { AVG_MONTH, DAY, HOUR, Interval, IntervalMath, MINUTE, SECOND, YEAR } from '@shared/models/time/time.models';
+import {
+  AVG_MONTH,
+  calculateTsOffset,
+  DAY,
+  HOUR,
+  Interval,
+  IntervalMath,
+  MINUTE,
+  SECOND,
+  YEAR
+} from '@shared/models/time/time.models';
 import moment from 'moment';
+import tinycolor from 'tinycolor2';
+import { WidgetContext } from '@home/models/widget-component.models';
+import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
+import {
+  IWidgetSubscription,
+  WidgetSubscriptionCallbacks,
+  WidgetSubscriptionOptions
+} from '@core/api/widget-api.models';
+import { UnitService } from '@core/services/unit.service';
+import { TbUnit, TbUnitConverter } from '@shared/models/unit.models';
 
 export type ComponentStyle = {[klass: string]: any};
 
-export const cssUnits = ['px', 'em', '%', 'rem', 'pt', 'pc', 'in', 'cm', 'mm', 'ex', 'ch', 'vw', 'vh', 'vmin', 'vmax'] as const;
+export const cssUnits = ['px', 'em', '%', 'rem', 'pt', 'pc', 'in', 'cm', 'mm', 'ex', 'ch', 'vw', 'vh', 'vmin', 'vmax'];
 type cssUnitTuple = typeof cssUnits;
 export type cssUnit = cssUnitTuple[number];
 
-export const fontWeights = ['normal', 'bold', 'bolder', 'lighter', '100', '200', '300', '400', '500', '600', '700', '800', '900'] as const;
+export const fontWeights = ['normal', 'bold', 'bolder', 'lighter', '100', '200', '300', '400', '500', '600', '700', '800', '900'];
 type fontWeightTuple = typeof fontWeights;
 export type fontWeight = fontWeightTuple[number];
 
@@ -56,7 +73,7 @@ export const fontWeightTranslations = new Map<fontWeight, string>(
   ]
 );
 
-export const fontStyles = ['normal', 'italic', 'oblique'] as const;
+export const fontStyles = ['normal', 'italic', 'oblique'];
 type fontStyleTuple = typeof fontStyles;
 export type fontStyle = fontStyleTuple[number];
 
@@ -70,6 +87,37 @@ export const fontStyleTranslations = new Map<fontStyle, string>(
 
 export const commonFonts = ['Roboto', 'monospace', 'sans-serif', 'serif'];
 
+export const alignments = ['left', 'center', 'right', 'justify', 'top', 'middle', 'bottom'];
+type alignmentTuple = typeof alignments;
+export type alignment = alignmentTuple[number];
+
+export const alignmentTranslations = new Map<alignment, string>(
+  [
+    ['left', 'widgets.alignment.align-left'],
+    ['center', 'widgets.alignment.align-center'],
+    ['right', 'widgets.alignment.align-right'],
+    ['justify', 'widgets.alignment.justify'],
+    ['top', 'widgets.alignment.align-top'],
+    ['middle', 'widgets.alignment.align-middle'],
+    ['bottom', 'widgets.alignment.align-bottom']
+  ]
+);
+
+export const alignmentIcons = new Map<alignment, string>(
+  [
+    ['left', 'format_align_left'],
+    ['center', 'format_align_center'],
+    ['right', 'format_align_right'],
+    ['justify', 'format_align_justify'],
+    ['top', 'mdi:format-align-top'],
+    ['middle', 'mdi:format-align-middle'],
+    ['bottom', 'mdi:format-align-bottom']
+  ]
+);
+
+export const horizontalAlignments: alignment[] = ['left', 'center', 'right', 'justify'];
+export const verticalAlignments: alignment[] = ['top', 'middle', 'bottom'];
+
 export interface Font {
   size: number;
   sizeUnit: cssUnit;
@@ -79,8 +127,35 @@ export interface Font {
   lineHeight: string;
 }
 
+export enum ValueSourceType {
+  constant = 'constant',
+  latestKey = 'latestKey',
+  entity = 'entity'
+}
+
+export const ValueSourceTypes = Object.keys(ValueSourceType) as ValueSourceType[];
+
+export const ValueSourceTypeTranslation = new Map<ValueSourceType, string>(
+  [
+    [ValueSourceType.constant, 'widgets.value-source.type-constant'],
+    [ValueSourceType.latestKey, 'widgets.value-source.type-latest-key'],
+    [ValueSourceType.entity, 'widgets.value-source.type-entity']
+  ]
+);
+
+export interface ValueSourceConfig {
+  type: ValueSourceType;
+  value?: number;
+  latestKeyType?: DataKeyType.attribute | DataKeyType.timeseries;
+  latestKey?: string;
+  entityKeyType?: DataKeyType.attribute | DataKeyType.timeseries;
+  entityAlias?: string;
+  entityKey?: string;
+}
+
 export enum ColorType {
   constant = 'constant',
+  gradient = 'gradient',
   range = 'range',
   function = 'function'
 }
@@ -88,15 +163,73 @@ export enum ColorType {
 export const colorTypeTranslations = new Map<ColorType, string>(
   [
     [ColorType.constant, 'widgets.color.color-type-constant'],
+    [ColorType.gradient, 'widgets.color.color-type-gradient'],
     [ColorType.range, 'widgets.color.color-type-range'],
     [ColorType.function, 'widgets.color.color-type-function']
   ]
 );
 
+interface AdvancedColorMode {
+  advancedMode?: boolean;
+}
+
 export interface ColorRange {
   from?: number;
   to?: number;
   color: string;
+}
+
+export interface AdvancedColorRange {
+  from?: ValueSourceConfig;
+  to?: ValueSourceConfig;
+  color: string;
+}
+
+export interface ColorRangeSettings extends AdvancedColorMode {
+  range?: ColorRange[];
+  rangeAdvanced?: AdvancedColorRange[];
+}
+
+/**
+ * Converts any stored rangeList shape to ColorRangeSettings. Always returns a new deep copy (null/undefined pass through),
+ * so callers may mutate the result freely.
+ */
+export const normalizeColorRangeSettings = (rangeList: ColorRangeSettings | ColorRange[]): ColorRangeSettings => {
+  if (!isDefinedAndNotNull(rangeList)) {
+    return rangeList as ColorRangeSettings;
+  }
+  if (Array.isArray(rangeList)) {
+    return {advancedMode: false, range: deepClone(rangeList)};
+  }
+  const result: ColorRangeSettings = deepClone(rangeList);
+  result.advancedMode = result.advancedMode ?? false;
+  // Unwraps the legacy corrupted shape {range: {advancedMode, range: [...]}} (possibly nested several levels deep)
+  let range: any = result.range;
+  while (isDefinedAndNotNull(range) && !Array.isArray(range)) {
+    range = range.range;
+  }
+  result.range = range;
+  return result;
+};
+
+export interface ColorGradientSettings extends AdvancedColorMode {
+  gradient?: string[];
+  gradientAdvanced?: AdvancedGradient[];
+  minValue?: number;
+  maxValue?: number;
+}
+
+export interface AdvancedGradient {
+  source: ValueSourceConfig;
+  color: string;
+}
+
+export interface ColorSettings {
+  type: ColorType;
+  color: string;
+  rangeList?: ColorRangeSettings;
+  gradient?: ColorGradientSettings;
+  colorFunction?: string;
 }
 
 export const colorRangeIncludes = (range: ColorRange, toCheck: ColorRange): boolean => {
@@ -123,8 +256,8 @@ export const colorRangeIncludes = (range: ColorRange, toCheck: ColorRange): bool
   }
 };
 
-export const filterIncludingColorRanges = (ranges: Array<ColorRange>): Array<ColorRange> => {
-  const result = [...ranges];
+export const filterIncludingColorRanges = (ranges: Array<ColorRange> | ColorRangeSettings): Array<ColorRange> => {
+  const result = [...(Array.isArray(ranges) ? ranges : ranges.range)];
   let includes = true;
   while (includes) {
     let index = -1;
@@ -172,13 +305,6 @@ export const sortedColorRange = (ranges: Array<ColorRange>): Array<ColorRange> =
     }
   ) : [];
 
-export interface ColorSettings {
-  type: ColorType;
-  color: string;
-  rangeList?: ColorRange[];
-  colorFunction?: string;
-}
-
 export interface TimewindowStyle {
   showIcon: boolean;
   icon: string;
@@ -203,6 +329,52 @@ export const constantColor = (color: string): ColorSettings => ({
   colorFunction: defaultColorFunction
 });
 
+export const gradientColor = (defaultColor: string, colors: string[], minValue?: number, maxValue?: number): ColorSettings => ({
+  type: ColorType.gradient,
+  color: defaultColor,
+  colorFunction: defaultColorFunction,
+  gradient: {
+    advancedMode: false,
+    gradient: colors,
+    minValue: isDefinedAndNotNull(minValue) ? minValue : 0,
+    maxValue: isDefinedAndNotNull(maxValue) ? maxValue : 100
+  }
+});
+
+export const defaultGradient = (minValue?: number, maxValue?: number): ColorGradientSettings => ({
+  advancedMode: false,
+  gradient: ['rgba(0, 255, 0, 1)', 'rgba(255, 0, 0, 1)'],
+  gradientAdvanced: [
+    {
+      source: {type: ValueSourceType.constant},
+      color: 'rgba(0, 255, 0, 1)'
+    },
+    {
+      source: {type: ValueSourceType.constant},
+      color: 'rgba(255, 0, 0, 1)'
+    }
+  ],
+  minValue: isDefinedAndNotNull(minValue) ? minValue : 0,
+  maxValue: isDefinedAndNotNull(maxValue) ? maxValue : 100
+});
+
+export const defaultRange = (): ColorRangeSettings => ({
+  advancedMode: false,
+  range: [],
+  rangeAdvanced: []
+});
+
+const updateGradientMinMaxValues = (colorSettings: ColorSettings, minValue?: number, maxValue?: number): void => {
+  if (isDefinedAndNotNull(colorSettings.gradient)) {
+    if (isDefinedAndNotNull(minValue)) {
+      colorSettings.gradient.minValue = minValue;
+    }
+    if (isDefinedAndNotNull(maxValue)) {
+      colorSettings.gradient.maxValue = maxValue;
+    }
+  }
+};
+
 export const defaultColorFunction = 'var temperature = value;\n' +
     'if (typeof temperature !== undefined) {\n' +
     '  var percent = (temperature + 60)/120 * 100;\n' +
@@ -218,11 +390,9 @@ export const resolveCssSize = (strSize?: string): [number, cssUnit] => {
   }
   let resolvedUnit: cssUnit;
   let resolvedSize = strSize;
-  for (const unit of cssUnits) {
-    if (strSize.endsWith(unit)) {
-      resolvedUnit = unit;
-      break;
-    }
+  const unitMatch = strSize.match(new RegExp(`(${cssUnits.join('|')})$`));
+  if (unitMatch) {
+    resolvedUnit = unitMatch[0] as cssUnit;
   }
   if (resolvedUnit) {
     resolvedSize = strSize.substring(0, strSize.length - resolvedUnit.length);
@@ -246,17 +416,34 @@ export const validateCssSize = (strSize?: string): string | undefined => {
 
 type ValueColorFunction = (value: any) => string;
 
+export interface ColorProcessorSettings {
+  settings: ColorSettings;
+  ctx?: WidgetContext;
+  minGradientValue?: number;
+  maxGradientValue?: number;
+}
+
 export abstract class ColorProcessor {
 
-  static fromSettings(color: ColorSettings): ColorProcessor {
-    const settings = color || constantColor(null);
+  static fromSettings(color: ColorSettings, ctx?: WidgetContext): ColorProcessor {
+    return ColorProcessor.fromColorProcessorSettings({
+      settings: color,
+      ctx
+    });
+  }
+
+  static fromColorProcessorSettings(setting: ColorProcessorSettings): ColorProcessor {
+    const settings = setting.settings || constantColor(null);
     switch (settings.type) {
       case ColorType.constant:
         return new ConstantColorProcessor(settings);
       case ColorType.range:
-        return new RangeColorProcessor(settings);
+        return new RangeColorProcessor(settings, setting.ctx);
       case ColorType.function:
         return new FunctionColorProcessor(settings);
+      case ColorType.gradient:
+        updateGradientMinMaxValues(settings, setting.minGradientValue, setting.maxGradientValue);
+        return new GradientColorProcessor(settings, setting.ctx);
       default:
         return new ConstantColorProcessor(settings);
     }
@@ -264,12 +451,14 @@ export abstract class ColorProcessor {
 
   color: string;
 
+  colorUpdated?: EventEmitter<void>;
+
   protected constructor(protected settings: ColorSettings) {
     this.color = settings.color;
   }
 
   abstract update(value: any): void;
-
+  destroy(): void {};
 }
 
 class ConstantColorProcessor extends ColorProcessor {
@@ -278,35 +467,6 @@ class ConstantColorProcessor extends ColorProcessor {
   }
 
   update(value: any): void {}
-}
-
-class RangeColorProcessor extends ColorProcessor {
-
-  constructor(protected settings: ColorSettings) {
-    super(settings);
-  }
-
-  update(value: any): void {
-    this.color = this.computeFromRange(value);
-  }
-
-  private computeFromRange(value: any): string {
-    if (this.settings.rangeList?.length && isDefinedAndNotNull(value) && isNumeric(value)) {
-      const num = Number(value);
-      for (const range of this.settings.rangeList) {
-        if (RangeColorProcessor.constantRange(range) && range.from === num) {
-          return range.color;
-        } else if ((!isNumber(range.from) || num >= range.from) && (!isNumber(range.to) || num < range.to)) {
-          return range.color;
-        }
-      }
-    }
-    return this.settings.color;
-  }
-
-  public static constantRange(range: ColorRange): boolean {
-    return isNumber(range.from) && isNumber(range.to) && range.from === range.to;
-  }
 }
 
 class FunctionColorProcessor extends ColorProcessor {
@@ -322,6 +482,230 @@ class FunctionColorProcessor extends ColorProcessor {
     if (this.colorFunction) {
       this.color = this.colorFunction(value) || this.settings.color;
     }
+  }
+}
+
+export abstract class AdvancedModeColorProcessor extends ColorProcessor {
+
+  protected sourcesSubscription: IWidgetSubscription;
+  protected advancedMode: boolean;
+  private currentValue: number;
+
+  colorUpdated = new EventEmitter<void>();
+
+  protected constructor(protected settings: ColorSettings,
+                        protected ctx: WidgetContext) {
+    super(settings);
+    this.advancedMode = this.getCurrentConfig()?.advancedMode;
+    if (this.advancedMode) {
+      createValueSubscription(
+        this.ctx,
+        this.datasourceConfigs(),
+        this.onDataUpdated.bind(this)
+      ).subscribe((subscription) => {
+        this.sourcesSubscription = subscription;
+      });
+    }
+  }
+
+  abstract updatedAdvancedData(data: Array<DatasourceData>): void;
+  abstract datasourceConfigs(): Array<ValueSourceConfig>;
+  abstract getCurrentConfig(): AdvancedColorMode;
+
+  update(value: any) {
+    if (this.advancedMode) {
+      this.currentValue = value;
+    }
+  }
+
+  destroy(): void {
+    if (this.sourcesSubscription) {
+      this.ctx.subscriptionApi.removeSubscription(this.sourcesSubscription.id);
+    }
+    this.colorUpdated.complete();
+    this.colorUpdated.unsubscribe();
+    this.colorUpdated = null;
+  }
+
+  private onDataUpdated(subscription: IWidgetSubscription) {
+    this.updatedAdvancedData(subscription.data);
+    if (this.currentValue) {
+      this.update(this.currentValue);
+      this.colorUpdated.emit();
+    }
+  }
+}
+
+class RangeColorProcessor extends AdvancedModeColorProcessor {
+
+  constructor(settings: ColorSettings,
+              ctx: WidgetContext) {
+    super({...settings, rangeList: normalizeColorRangeSettings(settings.rangeList)}, ctx);
+  }
+
+  update(value: any): void {
+    super.update(value);
+    this.color = this.computeFromRange(value);
+  }
+
+  updatedAdvancedData(data: Array<DatasourceData>) {
+    for (const keyData of data) {
+      if (keyData && keyData.data && keyData.data[0]) {
+        const attrValue = keyData.data[0][1];
+        if (isFinite(attrValue)) {
+          for (const currentIndex of keyData.dataKey.settings.indexes) {
+            const index = Math.floor(currentIndex / 2);
+            if (index === currentIndex / 2) {
+              this.settings.rangeList.rangeAdvanced[index].from.value = attrValue;
+            } else {
+              this.settings.rangeList.rangeAdvanced[index].to.value = attrValue;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  datasourceConfigs(): Array<ValueSourceConfig> {
+    const configs: Array<ValueSourceConfig> = [];
+    for (const range of this.settings.rangeList.rangeAdvanced) {
+      if (range.from) {
+        configs.push(range.from);
+      }
+      if (range.to) {
+        configs.push(range.to);
+      }
+    }
+    return configs;
+  }
+
+  getCurrentConfig(): AdvancedColorMode {
+    return this.settings.rangeList;
+  }
+
+  private computeFromRange(value: any): string {
+    const advancedMode = this.settings.rangeList?.advancedMode ?? false;
+    const rangeList: any = advancedMode ? this.settings.rangeList?.rangeAdvanced : this.settings.rangeList?.range;
+
+    if (rangeList?.length && isDefinedAndNotNull(value) && isNumeric(value)) {
+      const num = Number(value);
+      for (const range of rangeList) {
+        if (advancedMode ?
+          (RangeColorProcessor.constantAdvancedRange(range) && range.from.value === num ) :
+          (RangeColorProcessor.constantRange(range) && range.from === num)
+        ) {
+          return range.color;
+        } else if (advancedMode ?
+          ((!isNumber(range.from.value) || num >= range.from.value) && (!isNumber(range.to.value) || num < range.to.value)) :
+          ((!isNumber(range.from) || num >= range.from) && (!isNumber(range.to) || num < range.to))
+        ) {
+          return range.color;
+        }
+      }
+    }
+    return this.settings.color;
+  }
+
+  public static constantRange(range: ColorRange): boolean {
+    return isNumber(range.from) && isNumber(range.to) && range.from === range.to;
+  }
+  public static constantAdvancedRange(range: AdvancedColorRange): boolean {
+    return isNumber(range.from.value) && isNumber(range.to.value) && range.from.value === range.to.value;
+  }
+}
+
+class GradientColorProcessor extends AdvancedModeColorProcessor {
+
+  private readonly minValue: number;
+  private readonly maxValue: number;
+
+  constructor(protected settings: ColorSettings,
+              protected ctx: WidgetContext) {
+    super(settings, ctx);
+    this.minValue = isDefinedAndNotNull(settings.gradient.minValue) ? settings.gradient.minValue : 0;
+    this.maxValue = isDefinedAndNotNull(settings.gradient.maxValue) ? settings.gradient.maxValue : 100;
+  }
+
+  update(value: any): void {
+    const progress = this.calculateProgress(+value, this.minValue, this.maxValue);
+    super.update(progress);
+    this.color = this.getGradientColor(progress,
+      this.advancedMode ? this.settings.gradient.gradientAdvanced : this.settings.gradient.gradient);
+  }
+
+  updatedAdvancedData(data: Array<DatasourceData>) {
+    for (const keyData of data) {
+      if (keyData && keyData.data && keyData.data[0]) {
+        const attrValue = keyData.data[0][1];
+        if (isFinite(attrValue)) {
+          for (const index of keyData.dataKey.settings.indexes) {
+            this.settings.gradient.gradientAdvanced[index].source.value = attrValue;
+          }
+        }
+      }
+    }
+  }
+
+  datasourceConfigs(): Array<ValueSourceConfig> {
+    const configs: Array<ValueSourceConfig> = [];
+    for (const gradient of this.settings.gradient.gradientAdvanced) {
+      configs.push(gradient.source);
+    }
+    return configs;
+  }
+
+  getCurrentConfig(): AdvancedColorMode {
+    return this.settings.gradient;
+  }
+
+  private calculateProgress(current: number, min: number, max: number) {
+    if (current < min) {
+      return 0;
+    } else if (current > max) {
+      return 1;
+    }
+    return (current - min) / (max - min);
+  }
+
+  private getGradientColor(progress: number, levelColors: Array<AdvancedGradient | string>): string {
+    const colorsCount = levelColors.length;
+    const inc = colorsCount > 1 ? (1 / (colorsCount - 1)) : 1;
+    const colorsRange = [];
+    levelColors.forEach((levelColor, i) => {
+      const color = typeof levelColor === 'string' ? levelColor : levelColor.color;
+      if (color !== null) {
+        const tColor = tinycolor(color);
+        colorsRange.push({
+          pct:  typeof levelColor !== 'string' ?
+            this.calculateProgress(+levelColor.source.value, this.minValue, this.maxValue) : inc * i,
+          color: tColor.toRgb(),
+          alpha: tColor.getAlpha(),
+          rgbString: tColor.toRgbString()
+        });
+      }
+    });
+    if (progress === 0 || colorsRange.length === 1) {
+      return colorsRange[0].rgbString;
+    }
+
+    for (let j = 1; j < colorsRange.length; j++) {
+      if (progress <= colorsRange[j].pct) {
+        const lower = colorsRange[j - 1];
+        const upper = colorsRange[j];
+        const range = upper.pct - lower.pct;
+        const rangePct = (progress - lower.pct) / range;
+        const pctLower = 1 - rangePct;
+        const pctUpper = rangePct;
+        const color = tinycolor({
+          r: Math.floor(lower.color.r * pctLower + upper.color.r * pctUpper),
+          g: Math.floor(lower.color.g * pctLower + upper.color.g * pctUpper),
+          b: Math.floor(lower.color.b * pctLower + upper.color.b * pctUpper),
+          a: (lower.alpha + upper.alpha)/2
+        });
+        return color.toRgbString();
+      }
+    }
+    return colorsRange[colorsRange.length - 1].rgbString;
   }
 }
 
@@ -379,6 +763,19 @@ export const customDateFormat = (format: string): DateFormatSettings => ({
   auto: false
 });
 
+export const toDateFormatSettings = (strFormat: string): DateFormatSettings => {
+  if (strFormat === 'milliseconds') {
+    return millisecondsDateFormat();
+  }
+  const found = dateFormats.filter(format => !!format.format && !format.custom)
+                                              .find(format => format.format === strFormat);
+  if (found) {
+    return found;
+  } else {
+    return customDateFormat(strFormat);
+  }
+}
+
 export const defaultAutoDateFormatSettings: AutoDateFormatSettings = {
   millisecond: 'MMM dd yyyy HH:mm:ss.SSS',
   second: 'MMM dd yyyy HH:mm:ss',
@@ -396,6 +793,8 @@ export const autoDateFormat = (): DateFormatSettings => ({
   auto: true,
   autoDateFormatSettings: {}
 });
+
+export const millisecondsDateFormat = (): DateFormatSettings => simpleDateFormat('milliseconds');
 
 export const dateFormats = ['MMM yyyy', 'MMM dd yyyy', 'MMM dd yyyy HH:mm', 'dd MMM yyyy HH:mm', 'dd MMM yyyy HH:mm:ss',
   'yyyy MMM dd HH:mm', 'MM/dd/yyyy HH:mm', 'dd/MM/yyyy HH:mm', 'MMM dd yyyy HH:mm:ss', 'yyyy/MM/dd HH:mm:ss', 'yyyy-MM-dd HH:mm:ss',
@@ -421,6 +820,13 @@ export const compareDateFormats = (df1: DateFormatSettings, df2: DateFormatSetti
   return false;
 };
 
+export const dateFormatPreview = (date: DatePipe, format: string, timezone?: string): string => {
+  if (timezone) {
+    timezone = moment.tz(timezone).zoneAbbr();
+  }
+  return format === 'milliseconds' ? `${Date.now()}` : date.transform(Date.now(), format, timezone);
+}
+
 export abstract class DateFormatProcessor {
 
   static fromSettings($injector: Injector, settings: DateFormatSettings): DateFormatProcessor {
@@ -438,6 +844,8 @@ export abstract class DateFormatProcessor {
   protected constructor(protected $injector: Injector,
                         protected settings: DateFormatSettings) {
   }
+
+  formattedUpdated?: Observable<void>;
 
   abstract update(ts: string | number | Date, interval?: Interval): string;
 
@@ -468,27 +876,56 @@ export class LastUpdateAgoDateFormatProcessor extends DateFormatProcessor {
 
   private dateAgoPipe: DateAgoPipe;
   private translate: TranslateService;
+  private ngZone: NgZone;
+  private readonly ts$ = new BehaviorSubject<number>(null);
+
+  readonly formattedUpdated: Observable<void> = this.ts$.pipe(
+    distinctUntilChanged(),
+    switchMap(ts => this.agoTicks(ts)),
+    map(() => this.format(this.ts$.value)),
+    filter(text => text !== this.formatted),
+    map(text => {
+      this.formatted = text;
+    }),
+    share()
+  );
 
   constructor(protected $injector: Injector,
               protected settings: DateFormatSettings) {
     super($injector, settings);
     this.dateAgoPipe = $injector.get(DateAgoPipe);
     this.translate = $injector.get(TranslateService);
+    this.ngZone = $injector.get(NgZone);
   }
 
-  update(ts: string| number | Date): string {
-    if (ts) {
-      const agoText = this.dateAgoPipe.transform(ts, {applyAgo: true, short: true, textPart: true});
-      if (this.settings.hideLastUpdatePrefix) {
-        this.formatted = agoText;
-      } else {
-        this.formatted = this.translate.instant('date.last-update-n-ago-text',
-          {agoText});
-      }
-    } else {
-      this.formatted = '&nbsp;';
-    }
+  update(ts: string | number | Date): string {
+    this.ts$.next(ts ? +new Date(ts) : null);
+    this.formatted = ts ? this.format(ts) : '&nbsp;';
     return this.formatted;
+  }
+
+  private format(ts: string | number | Date): string {
+    const agoText = this.dateAgoPipe.transform(ts, {applyAgo: true, short: true, textPart: true});
+    return this.settings.hideLastUpdatePrefix
+      ? agoText
+      : this.translate.instant('date.last-update-n-ago-text', {agoText});
+  }
+
+  private agoTicks(ts: number): Observable<void> {
+    return new Observable<void>(subscriber => {
+      let tick: Subscription;
+      const schedule = () => {
+        const delay = nextAgoChangeDelay(ts);
+        if (delay !== null) {
+          tick = timer(delay).subscribe(() => {
+            subscriber.next();
+            schedule();
+          });
+        }
+      };
+      this.ngZone.runOutsideAngular(schedule);
+      return () => tick?.unsubscribe();
+    });
   }
 
 }
@@ -520,6 +957,104 @@ export class AutoDateFormatProcessor extends DateFormatProcessor {
     }
     return this.formatted;
   }
+}
+
+export interface ValueFormatSettings {
+  decimals?: number;
+  units?: TbUnit;
+  showZeroDecimals?: boolean;
+  ignoreUnitSymbol?: boolean;
+}
+
+export abstract class ValueFormatProcessor {
+
+  protected isDefinedDecimals: boolean;
+  protected hideZeroDecimals: boolean;
+  protected unitSymbol: string;
+
+  static fromSettings($injector: Injector, settings: ValueFormatSettings): ValueFormatProcessor;
+  static fromSettings(unitService: UnitService, settings: ValueFormatSettings): ValueFormatProcessor;
+  static fromSettings(unitServiceOrInjector: Injector | UnitService, settings: ValueFormatSettings): ValueFormatProcessor {
+    if (settings.units !== null && typeof settings.units === 'object') {
+      return new UnitConverterValueFormatProcessor(unitServiceOrInjector, settings)
+    }
+    return new SimpleValueFormatProcessor(settings);
+  }
+
+  protected constructor(protected settings: ValueFormatSettings) {
+  }
+
+  abstract format(value: any): string;
+
+  protected formatValue(value: number): string {
+    let formatted: number | string = value;
+    if (this.isDefinedDecimals) {
+      formatted = formatted.toFixed(this.settings.decimals);
+    }
+    if (this.hideZeroDecimals) {
+      formatted = Number(formatted);
+    }
+    formatted = formatted.toString();
+    if (this.unitSymbol) {
+      formatted += ` ${this.unitSymbol}`;
+    }
+    return formatted;
+  }
+}
+
+export class SimpleValueFormatProcessor extends ValueFormatProcessor {
+
+  constructor(protected settings: ValueFormatSettings) {
+    super(settings);
+    this.unitSymbol = !settings.ignoreUnitSymbol && isNotEmptyStr(settings.units) ? (settings.units as string) : null;
+    this.isDefinedDecimals = isDefinedAndNotNull(settings.decimals);
+    this.hideZeroDecimals = !settings.showZeroDecimals;
+  }
+
+  format(value: any): string {
+    if (isDefinedAndNotNull(value) && isNumeric(value) && (this.isDefinedDecimals || this.unitSymbol || Number(value).toString() === value)) {
+      return this.formatValue(Number(value));
+    }
+    return value ?? '';
+  }
+}
+
+export class UnitConverterValueFormatProcessor extends ValueFormatProcessor {
+
+  private readonly unitConverter: TbUnitConverter;
+
+  constructor(protected unitServiceOrInjector: Injector | UnitService,
+              protected settings: ValueFormatSettings) {
+    super(settings);
+    const unitService = this.unitServiceOrInjector instanceof UnitService ? this.unitServiceOrInjector : this.unitServiceOrInjector.get(UnitService);
+    const unit = settings.units;
+    this.unitSymbol = settings.ignoreUnitSymbol ? null : unitService.getTargetUnitSymbol(unit);
+    this.unitConverter = unitService.geUnitConverter(unit);
+
+    this.isDefinedDecimals = isDefinedAndNotNull(settings.decimals);
+    this.hideZeroDecimals = !settings.showZeroDecimals;
+  }
+
+  format(value: any): string {
+    if (isDefinedAndNotNull(value) && isNumeric(value)) {
+      const formatted = this.unitConverter(Number(value));
+      return this.formatValue(formatted);
+    }
+    return value ?? '';
+  }
+}
+
+export const createValueFormatterFromSettings = (ctx: WidgetContext): ValueFormatProcessor => {
+  let decimals = ctx.decimals;
+  let units = ctx.units;
+  const dataKey = getDataKey(ctx.datasources);
+  if (isDefinedAndNotNull(dataKey?.decimals)) {
+    decimals = dataKey.decimals;
+  }
+  if (dataKey?.units) {
+    units = dataKey.units;
+  }
+  return ValueFormatProcessor.fromSettings(ctx.$injector, {units: units, decimals: decimals});
 }
 
 const intervalToFormatTimeUnit = (interval: Interval): FormatTimeUnit => {
@@ -602,6 +1137,24 @@ export interface BackgroundSettings {
   color?: string;
   overlay: OverlaySettings;
 }
+
+export const isBackgroundSettings = (background: any): background is BackgroundSettings => {
+  if (background && background.type && background.overlay && background.overlay.color) {
+    return true;
+  } else {
+    return false;
+  }
+};
+
+export const colorBackground = (color: string): BackgroundSettings => ({
+  type: BackgroundType.color,
+  color,
+  overlay: {
+    enabled: false,
+    color: 'rgba(255,255,255,0.72)',
+    blur: 3
+  }
+});
 
 export const iconStyle = (size: number | string, sizeUnit: cssUnit = 'px'): ComponentStyle => {
   const iconSize = typeof size === 'number' ? size + sizeUnit : size;
@@ -835,4 +1388,111 @@ export const getLatestSingleTsValue = (data: Array<DatasourceData>): DataEntry =
     }
   }
   return null;
+};
+
+export const createValueSubscription = (ctx: WidgetContext,
+                                        datasourceConfigs: ValueSourceConfig[],
+                                        onDataUpdated: WidgetSubscriptionCallbacks['onDataUpdated']): Observable<IWidgetSubscription> => {
+  let datasources: Datasource[] = [];
+  let index = 0;
+
+  datasourceConfigs.forEach(config => {
+    if (config.type !== ValueSourceType.constant) {
+      try {
+        datasources = generateDatasource(ctx, datasources, config, index);
+      } catch (e) {
+        return;
+      }
+    }
+    index++;
+  });
+
+  if (datasources.length) {
+    return subscribeForDatasource(ctx, datasources, onDataUpdated);
+  }
+  return EMPTY;
+};
+
+const generateDatasource = (ctx: WidgetContext,
+                            datasources: Datasource[],
+                            valueSource: ValueSourceConfig,
+                            index: number): Datasource[] => {
+  if (valueSource.type === ValueSourceType.latestKey) {
+    if (ctx.datasources.length && isDefinedAndNotNull(ctx.datasources[0].aliasName)) {
+      datasources = configureDatasource(ctx, valueSource, ctx.datasources[0].aliasName, datasources, index, true);
+    } else {
+      datasources = configureDatasource(ctx, valueSource, '', datasources, index, true);
+    }
+  } else if (valueSource.type === ValueSourceType.entity) {
+    datasources = configureDatasource(ctx, valueSource, valueSource.entityAlias, datasources, index, false);
+  }
+  return datasources;
+};
+
+const configureDatasource = (ctx: WidgetContext,
+                             valueSource: ValueSourceConfig,
+                             entityAlias: string,
+                             datasources: Datasource[],
+                             index: number,
+                             isLatest: boolean): Datasource[] => {
+  const indexes = [index];
+  const entityAliasId = ctx.aliasController.getEntityAliasId(entityAlias);
+  let datasource = datasources.find(d =>
+    entityAlias ? (d.entityAliasId === entityAliasId) : (d.deviceId === ctx.datasources[0].deviceId)
+  );
+  const dataKey: DataKey = {
+    type: isLatest ? valueSource.latestKeyType : valueSource.entityKeyType,
+    name: isLatest ? valueSource.latestKey : valueSource.entityKey,
+    label: isLatest ? valueSource.latestKey : valueSource.entityKey,
+    settings: {indexes}
+  };
+  if (datasource) {
+    const findDataKey = datasource.dataKeys.find(dataKeyIteration =>
+      dataKeyIteration.name === (isLatest ? valueSource.latestKey : valueSource.entityKey));
+    if (findDataKey) {
+      findDataKey.settings.indexes.push(index);
+    } else {
+      datasource.dataKeys.push(dataKey);
+    }
+  } else {
+    if (entityAlias) {
+      datasource = {
+        type: DatasourceType.entity,
+        name: entityAlias,
+        aliasName: entityAlias,
+        entityAliasId,
+        dataKeys: [dataKey]
+      };
+    } else {
+      datasource = {
+        type: DatasourceType.device,
+        name: ctx.datasources[0].name,
+        deviceName: ctx.datasources[0].name,
+        deviceId: ctx.datasources[0].deviceId,
+        dataKeys: [dataKey]
+      };
+    }
+    datasources.push(datasource);
+  }
+  return datasources;
+};
+
+
+const subscribeForDatasource = (ctx: WidgetContext,
+                                datasource: Datasource[],
+                                onDataUpdated: WidgetSubscriptionCallbacks['onDataUpdated']): Observable<IWidgetSubscription> => {
+  if (!datasource.length) {
+    return EMPTY;
+  }
+
+  const subscriptionOptions: WidgetSubscriptionOptions = {
+    datasources: datasource,
+    useDashboardTimewindow: false,
+    type: widgetType.latest,
+    callbacks: {
+      onDataUpdated
+    }
+  };
+
+  return ctx.subscriptionApi.createSubscription(subscriptionOptions, true);
 };

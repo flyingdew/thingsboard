@@ -1,38 +1,41 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.relation;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import org.thingsboard.server.common.data.EntityType;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.relation.EntityRelation;
+import org.thingsboard.server.common.data.relation.EntityRelationPathQuery;
 import org.thingsboard.server.common.data.relation.RelationTypeGroup;
 import org.thingsboard.server.common.data.rule.RuleChainType;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Created by ashvayka on 25.04.17.
+ *
+ * <p><b>Write-path convention.</b> Every relation-mutating path (implemented here and orchestrated by the relation
+ * service) must run inside a {@code @Transactional} boundary and take the appropriate {@link RelationWriteLock} before
+ * its DML — the advisory lock and the DML must share one transaction/connection. See {@link RelationWriteLock} for the
+ * full locking contract (per-endpoint {@code lockEntities}, covering locks, lock-acquisition order, and the transaction
+ * assertion that fails fast in both Citus and plain-PostgreSQL modes).
  */
 public interface RelationDao {
 
     List<EntityRelation> findAllByFrom(TenantId tenantId, EntityId from, RelationTypeGroup typeGroup);
 
     List<EntityRelation> findAllByFrom(TenantId tenantId, EntityId from);
+
+    /**
+     * Finds the relations of the given type group that originate from any of the given entities of one entity type,
+     * in a single query. Callers are expected to bound the size of {@code fromIds}.
+     */
+    List<EntityRelation> findAllByFromIds(TenantId tenantId, Collection<UUID> fromIds, EntityType fromType, RelationTypeGroup typeGroup);
 
     List<EntityRelation> findAllByFromAndType(TenantId tenantId, EntityId from, String relationType, RelationTypeGroup typeGroup);
 
@@ -48,29 +51,30 @@ public interface RelationDao {
 
     EntityRelation getRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
 
-    boolean saveRelation(TenantId tenantId, EntityRelation relation);
+    EntityRelation saveRelation(TenantId tenantId, EntityRelation relation);
 
-    void saveRelations(TenantId tenantId, Collection<EntityRelation> relations);
+    List<EntityRelation> saveRelations(TenantId tenantId, List<EntityRelation> relations);
 
-    ListenableFuture<Boolean> saveRelationAsync(TenantId tenantId, EntityRelation relation);
+    ListenableFuture<EntityRelation> saveRelationAsync(TenantId tenantId, EntityRelation relation);
 
-    boolean deleteRelation(TenantId tenantId, EntityRelation relation);
+    EntityRelation deleteRelation(TenantId tenantId, EntityRelation relation);
 
-    ListenableFuture<Boolean> deleteRelationAsync(TenantId tenantId, EntityRelation relation);
+    ListenableFuture<EntityRelation> deleteRelationAsync(TenantId tenantId, EntityRelation relation);
 
-    boolean deleteRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
+    EntityRelation deleteRelation(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
 
-    ListenableFuture<Boolean> deleteRelationAsync(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
+    ListenableFuture<EntityRelation> deleteRelationAsync(TenantId tenantId, EntityId from, EntityId to, String relationType, RelationTypeGroup typeGroup);
 
-    void deleteOutboundRelations(TenantId tenantId, EntityId entity);
+    List<EntityRelation> deleteOutboundRelations(TenantId tenantId, EntityId entity);
 
-    void deleteOutboundRelations(TenantId tenantId, EntityId entity, RelationTypeGroup relationTypeGroup);
+    List<EntityRelation> deleteOutboundRelations(TenantId tenantId, EntityId entity, RelationTypeGroup relationTypeGroup);
 
-    void deleteInboundRelations(TenantId tenantId, EntityId entity);
+    List<EntityRelation> deleteInboundRelations(TenantId tenantId, EntityId entity);
 
-    void deleteInboundRelations(TenantId tenantId, EntityId entity, RelationTypeGroup relationTypeGroup);
-
-    ListenableFuture<Boolean> deleteOutboundRelationsAsync(TenantId tenantId, EntityId entity);
+    List<EntityRelation> deleteInboundRelations(TenantId tenantId, EntityId entity, RelationTypeGroup relationTypeGroup);
 
     List<EntityRelation> findRuleNodeToRuleChainRelations(RuleChainType ruleChainType, int limit);
+
+    List<EntityRelation> findByRelationPathQuery(TenantId tenantId, EntityRelationPathQuery relationPathQuery, int limit);
+
 }

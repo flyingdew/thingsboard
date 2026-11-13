@@ -1,30 +1,18 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.sql.attributes;
 
 import com.google.common.collect.Lists;
-import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.thingsboard.server.common.data.AttributeScope;
@@ -32,6 +20,7 @@ import org.thingsboard.server.common.data.id.DeviceProfileId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.kv.AttributeKvEntry;
+import org.thingsboard.server.common.data.util.TbPair;
 import org.thingsboard.server.common.stats.StatsFactory;
 import org.thingsboard.server.dao.DaoUtil;
 import org.thingsboard.server.dao.attributes.AttributesDao;
@@ -43,14 +32,21 @@ import org.thingsboard.server.dao.sql.JpaAbstractDaoListeningExecutorService;
 import org.thingsboard.server.dao.sql.ScheduledLogExecutorComponent;
 import org.thingsboard.server.dao.sql.TbSqlBlockingQueueParams;
 import org.thingsboard.server.dao.sql.TbSqlBlockingQueueWrapper;
+import org.thingsboard.server.dao.sql.citus.CitusKvWriteQueueSupport;
+import org.thingsboard.server.dao.sql.citus.CitusQueuePartitioner;
+import org.thingsboard.server.dao.sql.citus.CitusSettings;
+import org.thingsboard.server.dao.sql.citus.routing.CitusShardRouter;
 import org.thingsboard.server.dao.util.SqlDao;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Component
@@ -73,6 +69,60 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
     @Autowired
     private KeyDictionaryDao keyDictionaryDao;
 
+    @Autowired(required = false)
+    private CitusQueuePartitioner citusQueuePartitioner;
+
+    @Autowired(required = false)
+    private CitusShardRouter kvShardRouter;
+
+    @Autowired
+    private CitusSettings citusSettings;
+
+    private static final String REMOVE_WITH_VERSION_SEQ = "DELETE FROM attribute_kv WHERE entity_id = ? AND attribute_type = ? " +
+            "AND attribute_key = ? RETURNING nextval('attribute_kv_version_seq')";
+    private static final String REMOVE_WITH_VERSION_CITUS = "DELETE FROM attribute_kv WHERE entity_id = ? AND attribute_type = ? " +
+            "AND attribute_key = ? RETURNING version";
+
+    private static final String ATTRIBUTE_KV_PROJECTION =
+            "SELECT entity_id, attribute_type, attribute_key, bool_v, str_v, long_v, dbl_v, json_v, last_update_ts, version FROM attribute_kv";
+    private static final String FIND_ATTRIBUTE_KV_BY_KEY_QUERY =
+            ATTRIBUTE_KV_PROJECTION + " WHERE entity_id = ? AND attribute_type = ? AND attribute_key = ?";
+    private static final String FIND_ATTRIBUTE_KV_BY_KEYS_QUERY_PREFIX =
+            ATTRIBUTE_KV_PROJECTION + " WHERE entity_id = ? AND attribute_type = ? AND attribute_key IN (";
+    // Routed-read variant that resolves str_key via a join on the key_dictionary reference table (present on every
+    // worker), so a whole-entity read is a single round trip instead of one coordinator getKey per returned row.
+    // LEFT JOIN keeps row-for-row parity with the plain path: a row whose attribute_key has no dictionary entry
+    // is still returned (with a null str_key) rather than silently dropped.
+    private static final String FIND_ATTRIBUTE_KV_WITH_STR_KEY_BY_ENTITY_AND_TYPE_QUERY =
+            "SELECT a.entity_id, a.attribute_type, a.attribute_key, a.bool_v, a.str_v, a.long_v, a.dbl_v, a.json_v, a.last_update_ts, a.version, kd.key AS str_key " +
+                    "FROM attribute_kv a LEFT JOIN key_dictionary kd ON a.attribute_key = kd.key_id WHERE a.entity_id = ? AND a.attribute_type = ?";
+
+    static final RowMapper<AttributeKvEntity> ATTRIBUTE_KV_ROW_MAPPER = (rs, rowNum) -> {
+        AttributeKvEntity entity = new AttributeKvEntity();
+        entity.setId(new AttributeKvCompositeKey(
+                rs.getObject("entity_id", UUID.class),
+                rs.getInt("attribute_type"),
+                rs.getInt("attribute_key")));
+        entity.setBooleanValue(rs.getObject("bool_v", Boolean.class));
+        entity.setStrValue(rs.getString("str_v"));
+        entity.setLongValue(rs.getObject("long_v", Long.class));
+        entity.setDoubleValue(rs.getObject("dbl_v", Double.class));
+        entity.setJsonValue(rs.getString("json_v"));
+        entity.setLastUpdateTs(rs.getObject("last_update_ts", Long.class));
+        entity.setVersion(rs.getObject("version", Long.class));
+        return entity;
+    };
+
+    // Dedicated mapper for FIND_ATTRIBUTE_KV_WITH_STR_KEY_BY_ENTITY_AND_TYPE_QUERY: same columns as
+    // ATTRIBUTE_KV_ROW_MAPPER plus the joined str_key, so callers do not resolve it per row afterwards.
+    static final RowMapper<AttributeKvEntity> ATTRIBUTE_KV_WITH_STR_KEY_ROW_MAPPER = (rs, rowNum) -> {
+        AttributeKvEntity entity = ATTRIBUTE_KV_ROW_MAPPER.mapRow(rs, rowNum);
+        entity.setStrKey(rs.getString("str_key"));
+        return entity;
+    };
+
+    private String removeWithVersionQuery;
+
     @Value("${sql.attributes.batch_size:1000}")
     private int batchSize;
 
@@ -88,7 +138,7 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
     @Value("${sql.batch_sort:true}")
     private boolean batchSortEnabled;
 
-    private TbSqlBlockingQueueWrapper<AttributeKvEntity> queue;
+    private TbSqlBlockingQueueWrapper<AttributeKvEntity, Long> queue;
 
     @PostConstruct
     private void init() {
@@ -99,15 +149,31 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
                 .statsPrintIntervalMs(statsPrintIntervalMs)
                 .statsNamePrefix("attributes")
                 .batchSortEnabled(batchSortEnabled)
+                .withResponse(true)
                 .build();
 
-        Function<AttributeKvEntity, Integer> hashcodeFunction = entity -> entity.getId().getEntityId().hashCode();
-        queue = new TbSqlBlockingQueueWrapper<>(params, hashcodeFunction, batchThreads, statsFactory);
-        queue.init(logExecutor, v -> attributeKvInsertRepository.saveOrUpdate(v),
+        queue = CitusKvWriteQueueSupport.buildQueue(params, batchThreads, statsFactory,
+                citusQueuePartitioner, entity -> entity.getId().getEntityId());
+
+        Comparator<AttributeKvEntity> comparator =
                 Comparator.comparing((AttributeKvEntity attributeKvEntity) -> attributeKvEntity.getId().getEntityId())
                         .thenComparing(attributeKvEntity -> attributeKvEntity.getId().getAttributeType())
-                        .thenComparing(attributeKvEntity -> attributeKvEntity.getId().getAttributeKey())
-        );
+                        .thenComparing(attributeKvEntity -> attributeKvEntity.getId().getAttributeKey());
+
+        CitusKvWriteQueueSupport.initQueue(queue, logExecutor, citusQueuePartitioner, kvShardRouter,
+                attributeKvInsertRepository, comparator, l -> l);
+
+        initDeleteQuery();
+    }
+
+    // Selects the delete-with-version SQL for the active mode. Called from init() (not as its own @PostConstruct)
+    // so its ordering relative to the rest of the init is defined rather than left to bean post-processing order.
+    private void initDeleteQuery() {
+        this.removeWithVersionQuery = citusSettings.isEnabled() ? REMOVE_WITH_VERSION_CITUS : REMOVE_WITH_VERSION_SEQ;
+    }
+
+    String getRemoveWithVersionQuery() {
+        return removeWithVersionQuery;
     }
 
     @PreDestroy
@@ -119,6 +185,18 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
 
     @Override
     public Optional<AttributeKvEntry> find(TenantId tenantId, EntityId entityId, AttributeScope attributeScope, String attributeKey) {
+        if (CitusShardRouter.isRouting(kvShardRouter)) {
+            int keyId = keyDictionaryDao.getOrSaveKeyId(attributeKey);
+            List<AttributeKvEntity> rows = kvShardRouter.routedQuery(
+                    entityId.getId(), FIND_ATTRIBUTE_KV_BY_KEY_QUERY, ATTRIBUTE_KV_ROW_MAPPER,
+                    entityId.getId(), attributeScope.getId(), keyId);
+            if (!rows.isEmpty()) {
+                AttributeKvEntity attributeKvEntity = rows.get(0);
+                attributeKvEntity.setStrKey(attributeKey);
+                return Optional.ofNullable(DaoUtil.getData(attributeKvEntity));
+            }
+            return Optional.empty();
+        }
         AttributeKvCompositeKey compositeKey =
                 getAttributeKvCompositeKey(entityId, attributeScope.getId(), keyDictionaryDao.getOrSaveKeyId(attributeKey));
         Optional<AttributeKvEntity> attributeKvEntityOptional = attributeKvRepository.findById(compositeKey);
@@ -132,6 +210,31 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
 
     @Override
     public List<AttributeKvEntry> find(TenantId tenantId, EntityId entityId, AttributeScope attributeScope, Collection<String> attributeKeys) {
+        if (CitusShardRouter.isRouting(kvShardRouter)) {
+            // Resolve every key id once here and keep the id->name mapping locally, so the returned rows are labelled
+            // from this map instead of paying an uncached coordinator keyDictionaryDao.getKey per returned row.
+            List<Integer> keyIds = new ArrayList<>(attributeKeys.size());
+            Map<Integer, String> attributeKeyByKeyId = new HashMap<>();
+            for (String attributeKey : attributeKeys) {
+                int keyId = keyDictionaryDao.getOrSaveKeyId(attributeKey);
+                keyIds.add(keyId);
+                attributeKeyByKeyId.put(keyId, attributeKey);
+            }
+            if (keyIds.isEmpty()) {
+                return Collections.emptyList();
+            }
+            String placeholders = keyIds.stream().map(k -> "?").collect(Collectors.joining(", "));
+            String query = FIND_ATTRIBUTE_KV_BY_KEYS_QUERY_PREFIX + placeholders + ")";
+            Object[] args = new Object[keyIds.size() + 2];
+            args[0] = entityId.getId();
+            args[1] = attributeScope.getId();
+            for (int i = 0; i < keyIds.size(); i++) {
+                args[i + 2] = keyIds.get(i);
+            }
+            List<AttributeKvEntity> attributes = kvShardRouter.routedQuery(entityId.getId(), query, ATTRIBUTE_KV_ROW_MAPPER, args);
+            attributes.forEach(attributeKvEntity -> attributeKvEntity.setStrKey(attributeKeyByKeyId.get(attributeKvEntity.getId().getAttributeKey())));
+            return DaoUtil.convertDataList(attributes);
+        }
         List<AttributeKvCompositeKey> compositeKeys =
                 attributeKeys
                         .stream()
@@ -145,11 +248,23 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
 
     @Override
     public List<AttributeKvEntry> findAll(TenantId tenantId, EntityId entityId, AttributeScope attributeScope) {
-        List<AttributeKvEntity> attributes = attributeKvRepository.findAllEntityIdAndAttributeType(
+        if (CitusShardRouter.isRouting(kvShardRouter)) {
+            // str_key resolved via the key_dictionary join in the mapper, so no per-row coordinator getKey afterwards.
+            List<AttributeKvEntity> attributes = kvShardRouter.routedQuery(
+                    entityId.getId(), FIND_ATTRIBUTE_KV_WITH_STR_KEY_BY_ENTITY_AND_TYPE_QUERY, ATTRIBUTE_KV_WITH_STR_KEY_ROW_MAPPER,
+                    entityId.getId(), attributeScope.getId());
+            return DaoUtil.convertDataList(attributes);
+        }
+        List<AttributeKvEntity> attributes = attributeKvRepository.findAllByEntityIdAndAttributeType(
                 entityId.getId(),
                 attributeScope.getId());
         attributes.forEach(attributeKvEntity -> attributeKvEntity.setStrKey(keyDictionaryDao.getKey(attributeKvEntity.getId().getAttributeKey())));
         return DaoUtil.convertDataList(Lists.newArrayList(attributes));
+    }
+
+    @Override
+    public List<AttributeKvEntity> findNextBatch(UUID entityId, int attributeType, int attributeKey, int batchSize) {
+        return attributeKvRepository.findNextBatch(entityId, attributeType, attributeKey, batchSize);
     }
 
     @Override
@@ -171,14 +286,38 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
     }
 
     @Override
-    public List<String> findAllKeysByEntityIdsAndAttributeType(TenantId tenantId, List<EntityId> entityIds, String attributeType) {
+    public List<String> findAllKeysByEntityIdsAndScope(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
         return attributeKvRepository
-                .findAllKeysByEntityIdsAndAttributeType(entityIds.stream().map(EntityId::getId).collect(Collectors.toList()), AttributeScope.valueOf(attributeType).getId())
-                .stream().map(id -> keyDictionaryDao.getKey(id)).collect(Collectors.toList());
+                .findAllKeysByEntityIdsAndAttributeType(entityIds.stream().map(EntityId::getId).toList(), scope.getId())
+                .stream()
+                .map(keyDictionaryDao::getKey)
+                .toList();
     }
 
     @Override
-    public ListenableFuture<String> save(TenantId tenantId, EntityId entityId, AttributeScope attributeScope, AttributeKvEntry attribute) {
+    public ListenableFuture<List<String>> findAllKeysByEntityIdsAndScopeAsync(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        return service.submit(() -> findAllKeysByEntityIdsAndScope(tenantId, entityIds, scope));
+    }
+
+    @Override
+    public List<AttributeKvEntry> findLatestByEntityIdsAndScope(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        if (CollectionUtils.isEmpty(entityIds)) {
+            return Collections.emptyList();
+        }
+        var uniqueIds = entityIds.stream().map(EntityId::getId).distinct().toList();
+        return attributeKvRepository.findLatestByEntityIdsAndAttributeType(uniqueIds, scope.getId())
+                .stream()
+                .map(AttributeKvRepository.AttributeKvProjection::toAttributeKvEntry)
+                .toList();
+    }
+
+    @Override
+    public ListenableFuture<List<AttributeKvEntry>> findLatestByEntityIdsAndScopeAsync(TenantId tenantId, List<EntityId> entityIds, AttributeScope scope) {
+        return service.submit(() -> findLatestByEntityIdsAndScope(tenantId, entityIds, scope));
+    }
+
+    @Override
+    public ListenableFuture<Long> save(TenantId tenantId, EntityId entityId, AttributeScope attributeScope, AttributeKvEntry attribute) {
         AttributeKvEntity entity = new AttributeKvEntity();
         entity.setId(new AttributeKvCompositeKey(entityId.getId(), attributeScope.getId(), keyDictionaryDao.getOrSaveKeyId(attribute.getKey())));
         entity.setLastUpdateTs(attribute.getLastUpdateTs());
@@ -187,11 +326,11 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
         entity.setLongValue(attribute.getLongValue().orElse(null));
         entity.setBooleanValue(attribute.getBooleanValue().orElse(null));
         entity.setJsonValue(attribute.getJsonValue().orElse(null));
-        return addToQueue(entity, attribute.getKey());
+        return addToQueue(entity);
     }
 
-    private ListenableFuture<String> addToQueue(AttributeKvEntity entity, String key) {
-        return Futures.transform(queue.add(entity), v -> key, MoreExecutors.directExecutor());
+    private ListenableFuture<Long> addToQueue(AttributeKvEntity entity) {
+        return queue.add(entity);
     }
 
     @Override
@@ -201,6 +340,26 @@ public class JpaAttributeDao extends JpaAbstractDaoListeningExecutorService impl
             futuresList.add(service.submit(() -> {
                 attributeKvRepository.delete(entityId.getId(), attributeScope.getId(), keyDictionaryDao.getOrSaveKeyId(key));
                 return key;
+            }));
+        }
+        return futuresList;
+    }
+
+    @Override
+    public List<ListenableFuture<TbPair<String, Long>>> removeAllWithVersions(TenantId tenantId, EntityId entityId, AttributeScope attributeScope, List<String> keys) {
+        List<ListenableFuture<TbPair<String, Long>>> futuresList = new ArrayList<>(keys.size());
+        for (String key : keys) {
+            futuresList.add(service.submit(() -> {
+                Long version;
+                if (CitusShardRouter.isRouting(kvShardRouter)) {
+                    version = kvShardRouter.routedQuery(entityId.getId(), removeWithVersionQuery,
+                            rs -> rs.next() ? rs.getObject(1, Long.class) : null,
+                            entityId.getId(), attributeScope.getId(), keyDictionaryDao.getOrSaveKeyId(key));
+                } else {
+                    version = transactionTemplate.execute(status -> jdbcTemplate.query(removeWithVersionQuery,
+                            rs -> rs.next() ? rs.getObject(1, Long.class) : null, entityId.getId(), attributeScope.getId(), keyDictionaryDao.getOrSaveKeyId(key)));
+                }
+                return TbPair.of(key, version);
             }));
         }
         return futuresList;

@@ -1,28 +1,19 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.widget;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.id.WidgetsBundleId;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
 import org.thingsboard.server.common.data.widget.WidgetsBundle;
+import org.thingsboard.server.common.data.widget.WidgetsBundleFilter;
 import org.thingsboard.server.dao.entity.EntityDaoService;
 
 import java.util.List;
+import java.util.stream.Stream;
 
 public interface WidgetsBundleService extends EntityDaoService {
 
@@ -34,18 +25,26 @@ public interface WidgetsBundleService extends EntityDaoService {
 
     WidgetsBundle findWidgetsBundleByTenantIdAndAlias(TenantId tenantId, String alias);
 
-    PageData<WidgetsBundle> findSystemWidgetsBundlesByPageLink(TenantId tenantId, boolean fullSearch, PageLink pageLink);
+    PageData<WidgetsBundle> findSystemWidgetsBundlesByPageLink(WidgetsBundleFilter widgetsBundleFilter, PageLink pageLink);
 
     List<WidgetsBundle> findSystemWidgetsBundles(TenantId tenantId);
 
     PageData<WidgetsBundle> findTenantWidgetsBundlesByTenantId(TenantId tenantId, PageLink pageLink);
 
-    PageData<WidgetsBundle> findAllTenantWidgetsBundlesByTenantIdAndPageLink(TenantId tenantId, boolean fullSearch, PageLink pageLink);
+    PageData<WidgetsBundle> findAllTenantWidgetsBundlesByTenantIdAndPageLink(WidgetsBundleFilter widgetsBundleFilter, PageLink pageLink);
 
-    PageData<WidgetsBundle> findTenantWidgetsBundlesByTenantIdAndPageLink(TenantId tenantId, boolean fullSearch, PageLink pageLink);
+    PageData<WidgetsBundle> findTenantWidgetsBundlesByTenantIdAndPageLink(WidgetsBundleFilter widgetsBundleFilter, PageLink pageLink);
 
     List<WidgetsBundle> findAllTenantWidgetsBundlesByTenantId(TenantId tenantId);
 
+    ListenableFuture<List<WidgetsBundle>> findSystemWidgetsBundlesByIdsAsync(TenantId tenantId, List<WidgetsBundleId> widgetsBundleIds);
+
+    ListenableFuture<List<WidgetsBundle>> findAllTenantWidgetsBundlesByIdsAsync(TenantId tenantId, List<WidgetsBundleId> widgetsBundleIds);
+
+    List<WidgetsBundle> findSystemOrTenantWidgetsBundlesByIds(TenantId tenantId, List<WidgetsBundleId> widgetsBundleIds);
+
     void deleteWidgetsBundlesByTenantId(TenantId tenantId);
+
+    void updateSystemWidgets(Stream<String> bundles, Stream<String> widgets);
 
 }
